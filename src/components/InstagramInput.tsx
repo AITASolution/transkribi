@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Instagram } from 'lucide-react';
+import * as lucideReact from 'lucide-react';
 
 interface InstagramInputProps {
   onReelSubmit: (url: string) => void;
@@ -42,7 +42,7 @@ export function InstagramInput({ onReelSubmit, isLoading }: InstagramInputProps)
           </label>
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Instagram className="h-5 w-5 text-gray-400" />
+              <lucideReact.Instagram className="h-5 w-5 text-gray-400" />
             </div>
             <input
               type="url"
