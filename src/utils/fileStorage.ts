@@ -6,7 +6,7 @@ export async function saveTempFile(data: Buffer | Blob, filename: string): Promi
   return new File([data], filename);
 }
 
-export async function deleteTempFile(file: File) {
+export async function deleteTempFile() {
   // In browser environment, garbage collection will handle cleanup
   // No explicit deletion needed
 }

@@ -34,21 +34,26 @@ export function InstagramInput({ onReelSubmit, isLoading }: InstagramInputProps)
   };
 
   return (
-    <form onSubmit={handleSubmit} className="mb-6">
-      <div className="flex flex-col gap-2">
-        <div className="flex-1">
-          <label htmlFor="reelUrl" className="block text-sm font-medium text-gray-700 mb-1">
+    <form onSubmit={handleSubmit}>
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="reelUrl" className="block text-sm font-medium text-text mb-2">
             Instagram Reel URL
           </label>
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <lucideReact.Instagram className="h-5 w-5 text-gray-400" />
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none transition-colors duration-200">
+              <lucideReact.Instagram 
+                className={`h-5 w-5 ${error ? 'text-error' : 'text-text-secondary group-hover:text-primary'}`} 
+              />
             </div>
             <input
               type="url"
               id="reelUrl"
-              className={`block w-full pl-10 pr-3 py-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 
-                ${error ? 'border-red-300' : 'border-gray-300'}`}
+              className={`input-modern pl-10 ${
+                error 
+                  ? 'border-error focus:border-error focus:ring-error/10' 
+                  : 'focus:border-primary focus:ring-primary/10'
+              }`}
               placeholder="https://www.instagram.com/reel/..."
               value={reelUrl}
               onChange={(e) => {
@@ -59,19 +64,32 @@ export function InstagramInput({ onReelSubmit, isLoading }: InstagramInputProps)
             />
           </div>
           {error && (
-            <p className="mt-1 text-sm text-red-600">{error}</p>
+            <p className="mt-2 text-sm text-error flex items-center gap-1">
+              <lucideReact.AlertCircle className="h-4 w-4" />
+              {error}
+            </p>
           )}
         </div>
         <button
           type="submit"
           disabled={isLoading || !reelUrl.trim()}
-          className={`px-4 py-2 rounded-md text-white font-medium transition-colors
+          className={`button-modern w-full flex items-center justify-center gap-2
             ${isLoading || !reelUrl.trim()
-              ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-blue-600 hover:bg-blue-700'
+              ? 'opacity-50 cursor-not-allowed'
+              : 'hover:translate-y-[-2px] active:translate-y-0'
             }`}
         >
-          {isLoading ? 'Wird verarbeitet...' : 'Transkribieren'}
+          {isLoading ? (
+            <>
+              <div className="loading-spinner w-5 h-5" />
+              Wird verarbeitet...
+            </>
+          ) : (
+            <>
+              <lucideReact.FileAudio className="h-5 w-5" />
+              Transkribieren
+            </>
+          )}
         </button>
       </div>
     </form>

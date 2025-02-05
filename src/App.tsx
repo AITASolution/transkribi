@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { DropZone } from './components/DropZone';
 import { InstagramInput } from './components/InstagramInput';
 import { TranscriptionOutput } from './components/TranscriptionResult';
+import { Background } from './components/Background';
 import { processFile } from './utils/fileProcessor';
 import { downloadInstagramReel } from './utils/instagramDownloader';
 import { TranscriptionResult } from './types';
-import { Headphones } from 'lucide-react';
+import { Headphones, Waves } from 'lucide-react';
+import './styles/theme.css';
 
 function App() {
   const [result, setResult] = useState<TranscriptionResult>({
@@ -46,29 +48,47 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-3xl mx-auto">
-        <div className="text-center mb-8">
-          <Headphones className="mx-auto h-12 w-12 text-blue-500" />
-          <h1 className="mt-4 text-3xl font-bold text-gray-900">
-            Audio & Video Transkription
+    <div className="min-h-screen py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
+      <Background />
+      <div className="max-w-3xl mx-auto relative">
+        <div className="text-center mb-16 slide-up">
+          <div className="flex items-center justify-center gap-4 mb-6">
+            <div className="relative">
+              <div className="absolute inset-0 animate-pulse-slow blur-xl bg-primary/30" />
+              <Headphones className="h-14 w-14 text-primary relative" />
+            </div>
+            <div className="relative">
+              <div className="absolute inset-0 animate-pulse-slow blur-xl bg-secondary/30" />
+              <Waves className="h-12 w-12 text-secondary relative animate-pulse" />
+            </div>
+          </div>
+          <h1 className="mt-4 text-5xl font-bold">
+            <span className="bg-gradient-to-r from-primary via-secondary to-primary bg-clip-text text-transparent bg-300% animate-gradient">
+              Audio & Video Transkription
+            </span>
           </h1>
-          <p className="mt-2 text-gray-600">
+          <p className="mt-6 text-text-secondary text-lg max-w-2xl mx-auto">
             Laden Sie eine Audio- oder Videodatei hoch oder geben Sie einen Instagram Reel Link ein
           </p>
         </div>
 
-        <InstagramInput 
-          onReelSubmit={handleReelSubmit}
-          isLoading={result.isLoading}
-        />
+        <div className="space-y-8 fade-in relative">
+          <div className="card-modern p-6">
+            <InstagramInput 
+              onReelSubmit={handleReelSubmit}
+              isLoading={result.isLoading}
+            />
+          </div>
 
-        <DropZone 
-          onFileAccepted={handleFileAccepted}
-          isLoading={result.isLoading}
-        />
+          <div className="card-modern p-6">
+            <DropZone 
+              onFileAccepted={handleFileAccepted}
+              isLoading={result.isLoading}
+            />
+          </div>
 
-        <TranscriptionOutput result={result} />
+          <TranscriptionOutput result={result} />
+        </div>
       </div>
     </div>
   );

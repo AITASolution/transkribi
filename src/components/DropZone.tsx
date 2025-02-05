@@ -25,19 +25,31 @@ export function DropZone({ onFileAccepted, isLoading }: DropZoneProps) {
   return (
     <div
       {...getRootProps()}
-      className={`p-8 border-2 border-dashed rounded-lg cursor-pointer transition-colors
-        ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400'}
+      className={`p-8 border-2 border-dashed rounded-xl cursor-pointer transition-all duration-300 
+        ${isDragActive 
+          ? 'border-primary bg-primary/5 scale-102 shadow-lg' 
+          : 'border-border hover:border-primary hover:shadow-md'
+        }
         ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
     >
       <input {...getInputProps()} />
-      <div className="flex flex-col items-center justify-center text-gray-600">
-        <Upload className="w-12 h-12 mb-4" />
+      <div className="flex flex-col items-center justify-center text-text-secondary">
+        <div className={`transition-transform duration-300 ${isDragActive ? 'scale-110' : ''}`}>
+          <Upload 
+            className={`w-12 h-12 mb-4 transition-colors duration-300
+              ${isDragActive ? 'text-primary' : 'text-text-secondary'}`}
+          />
+        </div>
         {isDragActive ? (
-          <p>Datei hier ablegen...</p>
+          <p className="text-primary font-medium animate-bounce">
+            Datei hier ablegen...
+          </p>
         ) : (
-          <div className="text-center">
-            <p className="mb-2">Drag & Drop eine Audio- oder Videodatei hier oder klicke zum Auswählen</p>
-            <p className="text-sm text-gray-500">
+          <div className="text-center space-y-2">
+            <p className="font-medium">
+              Drag & Drop eine Audio- oder Videodatei hier oder klicke zum Auswählen
+            </p>
+            <p className="text-sm opacity-75">
               Unterstützte Formate: {Object.values(SUPPORTED_FILE_TYPES).flat().join(', ')}
             </p>
           </div>

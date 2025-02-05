@@ -1,4 +1,4 @@
-import { convertVideoToMp3 } from './videoConverter';
+import { convertVideoToWav } from './videoConverter';
 import { transcribeAudio } from './openai';
 import { FileProcessingError } from './errors';
 import { ERROR_MESSAGES } from './constants';
@@ -10,7 +10,7 @@ const SUPPORTED_AUDIO_TYPES = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/fl
  * Splits audio at optimal points using Web Audio API
  */
 async function splitAudioFile(file: File): Promise<[File, File]> {
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
   // Convert file to ArrayBuffer
   const arrayBuffer = await file.arrayBuffer();
@@ -57,79 +57,104 @@ async function audioBufferToFile(
   suffix: string,
   originalFile: File
 ): Promise<File> {
-  // Create offline context for rendering
-  const offlineContext = new OfflineAudioContext(
-    audioBuffer.numberOfChannels,
-    audioBuffer.length,
-    audioBuffer.sampleRate
-  );
+  try {
+    // Create offline context for rendering
+    const offlineContext = new OfflineAudioContext(
+      audioBuffer.numberOfChannels,
+      audioBuffer.length,
+      audioBuffer.sampleRate
+    );
 
-  // Create buffer source
-  const source = offlineContext.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(offlineContext.destination);
-  source.start();
+    // Create buffer source
+    const source = offlineContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(offlineContext.destination);
+    source.start();
 
-  // Render audio
-  const renderedBuffer = await offlineContext.startRendering();
+    // Render audio
+    const renderedBuffer = await offlineContext.startRendering();
 
-  // Convert to WAV format
-  const wavBlob = await audioBufferToWav(renderedBuffer);
+    // Convert to WAV format with proper headers
+    const wavBlob = await audioBufferToWav(renderedBuffer);
 
-  // Extract original filename without extension
-  const fileName = originalFile.name.split('.').slice(0, -1).join('.');
+    // Create file with explicit MIME type
+    const fileName = originalFile.name.split('.').slice(0, -1).join('.');
+    const file = new File(
+      [wavBlob],
+      `${fileName}_part${suffix}.wav`,
+      { type: 'audio/wav' }
+    );
 
-  return new File(
-    [wavBlob],
-    `${fileName}_part${suffix}.wav`,
-    { type: 'audio/wav' }
-  );
+    // Verify file type and size
+    console.log(`📝 Created WAV file part${suffix}:`, {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    });
+
+    return file;
+  } catch (error) {
+    console.error(`❌ Error creating WAV file part${suffix}:`, error);
+    throw error;
+  }
 }
 
 /**
  * Converts AudioBuffer to WAV format Blob
  */
 function audioBufferToWav(buffer: AudioBuffer): Promise<Blob> {
-  const numberOfChannels = buffer.numberOfChannels;
-  const length = buffer.length * numberOfChannels * 2;
-  const outputBuffer = new ArrayBuffer(44 + length);
-  const view = new DataView(outputBuffer);
-  const channels = [];
-  let offset = 0;
-  let pos = 0;
+  return new Promise((resolve) => {
+    const numberOfChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const length = buffer.length * numberOfChannels * 2;
+    const outputBuffer = new ArrayBuffer(44 + length);
+    const view = new DataView(outputBuffer);
+    const channels = [];
+    let offset = 0;
 
-  // Extract channels
-  for (let i = 0; i < numberOfChannels; i++) {
-    channels.push(buffer.getChannelData(i));
-  }
-
-  // Write WAV header
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + length, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numberOfChannels, true);
-  view.setUint32(24, buffer.sampleRate, true);
-  view.setUint32(28, buffer.sampleRate * 2 * numberOfChannels, true);
-  view.setUint16(32, numberOfChannels * 2, true);
-  view.setUint16(34, 16, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, length, true);
-
-  // Write interleaved audio data
-  offset = 44;
-  for (let i = 0; i < buffer.length; i++) {
-    for (let j = 0; j < numberOfChannels; j++) {
-      pos = Math.min(1, Math.max(-1, channels[j][i]));
-      view.setInt16(offset, pos < 0 ? pos * 0x8000 : pos * 0x7FFF, true);
-      offset += 2;
+    // Extract channels
+    for (let i = 0; i < numberOfChannels; i++) {
+      channels.push(buffer.getChannelData(i));
     }
-  }
 
-  return new Promise(resolve => {
-    resolve(new Blob([outputBuffer], { type: 'audio/wav' }));
+    // Write WAV header
+    // "RIFF" chunk descriptor
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + length, true);
+    writeString(view, 8, 'WAVE');
+
+    // "fmt " sub-chunk
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+    view.setUint16(20, 1, true);  // AudioFormat (1 for PCM)
+    view.setUint16(22, numberOfChannels, true); // NumChannels
+    view.setUint32(24, sampleRate, true); // SampleRate
+    view.setUint32(28, sampleRate * numberOfChannels * 2, true); // ByteRate
+    view.setUint16(32, numberOfChannels * 2, true); // BlockAlign
+    view.setUint16(34, 16, true); // BitsPerSample
+
+    // "data" sub-chunk
+    writeString(view, 36, 'data');
+    view.setUint32(40, length, true);
+
+    // Write interleaved audio data
+    offset = 44;
+    for (let i = 0; i < buffer.length; i++) {
+      for (let j = 0; j < numberOfChannels; j++) {
+        const sample = Math.max(-1, Math.min(1, channels[j][i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+        offset += 2;
+      }
+    }
+
+    // Create blob with proper MIME type
+    const blob = new Blob([outputBuffer], { type: 'audio/wav' });
+    console.log('📝 WAV blob created:', {
+      size: blob.size,
+      type: blob.type
+    });
+    
+    resolve(blob);
   });
 }
 
@@ -187,7 +212,7 @@ export async function processFile(file: File): Promise<string> {
     // Falls der MIME-Type nicht eindeutig ist, prüfen wir zusätzlich den Dateinamen:
     if (file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4')) {
       console.log('🎥 Converting video to audio...');
-      audioFile = await convertVideoToMp3(file);
+      audioFile = await convertVideoToWav(file);
     } else if (SUPPORTED_AUDIO_TYPES.includes(file.type) || file.name.toLowerCase().endsWith('.mp3')) {
       console.log(`🎵 Using audio file directly (${file.type})`);
       audioFile = file;

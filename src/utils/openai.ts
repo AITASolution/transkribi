@@ -1,29 +1,28 @@
-import OpenAI from 'openai';
 import { TranscriptionError } from './errors';
 import { ERROR_MESSAGES } from './constants';
 
 export async function transcribeAudio(audioFile: File): Promise<string> {
-  if (!import.meta.env.VITE_OPENAI_API_KEY) {
-    throw new TranscriptionError(ERROR_MESSAGES.OPENAI_KEY_MISSING);
-  }
-
-  const openai = new OpenAI({
-    apiKey: import.meta.env.VITE_OPENAI_API_KEY,
-    dangerouslyAllowBrowser: true
-  });
-
   try {
-    const response = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: 'whisper-1',
-      language: 'de',
+    const formData = new FormData();
+    formData.append('file', audioFile);
+
+    const response = await fetch('http://localhost:3001/api/transcribe', {
+      method: 'POST',
+      body: formData,
     });
 
-    if (!response.text) {
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Transcription failed');
+    }
+
+    const data = await response.json();
+    
+    if (!data.text) {
       throw new TranscriptionError('Keine Transkription erhalten');
     }
 
-    return response.text;
+    return data.text;
   } catch (error) {
     console.error('Transcription error:', error);
     if (error instanceof Error) {

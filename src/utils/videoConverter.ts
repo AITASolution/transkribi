@@ -1,7 +1,7 @@
 import { ERROR_MESSAGES } from './constants';
 
-export async function convertVideoToMp3(videoFile: File): Promise<File> {
-  console.log('🔄 Starting video to MP3 conversion...');
+export async function convertVideoToWav(videoFile: File): Promise<File> {
+  console.log('🔄 Starting video to WAV conversion...');
   
   try {
     // Create audio context
@@ -34,12 +34,12 @@ export async function convertVideoToMp3(videoFile: File): Promise<File> {
     // Convert to WAV format
     const wavData = audioBufferToWav(renderedBuffer);
     
-    // Create MP3 file
-    const mp3Blob = new Blob([wavData], { type: 'audio/mp3' });
-    const mp3File = new File([mp3Blob], 'converted.mp3', { type: 'audio/mp3' });
+    // Create WAV file
+    const wavBlob = new Blob([wavData], { type: 'audio/wav' });
+    const wavFile = new File([wavBlob], 'converted.wav', { type: 'audio/wav' });
     
     console.log('✅ Conversion completed successfully');
-    return mp3File;
+    return wavFile;
     
   } catch (error) {
     console.error('❌ Conversion error:', error);
@@ -53,7 +53,6 @@ function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
   const buffer32 = new Float32Array(buffer.length * numOfChan);
   const view = new DataView(new ArrayBuffer(44 + length));
   const channels = [];
-  let offset = 0;
   let pos = 0;
 
   // Extract channels

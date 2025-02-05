@@ -3,46 +3,34 @@ import { VideoDownloadResult } from './types';
 import { InstagramError } from '../errors';
 import { ERROR_MESSAGES } from '../constants';
 
-const RAPID_API_KEY = import.meta.env.VITE_RAPID_API_KEY;
-const RAPID_API_HOST = 'instagram-downloader-download-instagram-stories-videos4.p.rapidapi.com';
-
 export async function fetchVideoMetadata(url: string): Promise<string> {
   console.log('🔍 Fetching video metadata for URL:', url);
   
-  if (!RAPID_API_KEY) {
-    console.error('❌ RapidAPI key missing');
-    throw new InstagramError(ERROR_MESSAGES.RAPID_API_KEY_MISSING);
-  }
-
   try {
-    console.log('📡 Making API request to RapidAPI...');
-    const response = await axios.get(`https://${RAPID_API_HOST}/convert`, {
-      params: { url },
+    console.log('📡 Making API request to backend...');
+    const response = await fetch('http://localhost:3001/api/instagram', {
+      method: 'POST',
       headers: {
-        'X-RapidAPI-Key': RAPID_API_KEY,
-        'X-RapidAPI-Host': RAPID_API_HOST,
+        'Content-Type': 'application/json',
       },
-      maxRedirects: 5,
+      body: JSON.stringify({ url }),
     });
 
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || ERROR_MESSAGES.INSTAGRAM_DATA_FETCH);
+    }
+
+    const data = await response.json();
     console.log('✅ API response received');
-    const data = response.data;
     
-    if (!data?.media?.[0]?.url) {
+    if (!data?.videoUrl) {
       console.error('❌ No video URL found in response');
       throw new Error(ERROR_MESSAGES.VIDEO_URL_NOT_FOUND);
     }
 
-    const videoUrl = data.media[0].url;
-    console.log('📹 Video URL extracted:', videoUrl);
-    
-    if (videoUrl.startsWith('https://kk.igdows.workers.dev/?url=')) {
-      const decodedUrl = decodeURIComponent(videoUrl.split('?url=')[1]);
-      console.log('🔄 Decoded proxy URL:', decodedUrl);
-      return decodedUrl;
-    }
-
-    return videoUrl;
+    console.log('📹 Video URL extracted:', data.videoUrl);
+    return data.videoUrl;
   } catch (error) {
     console.error('❌ Instagram API error:', error);
     if (axios.isAxiosError(error)) {
