@@ -1,27 +1,6 @@
 import { Handler } from '@netlify/functions';
 import OpenAI from 'openai';
-import { createReadStream } from 'fs';
-import formidable from 'formidable';
-import { IncomingMessage } from 'http';
-
-// Helper to parse form data
-const parseFormData = async (request: IncomingMessage) => {
-  return new Promise<{ files: formidable.Files }>((resolve, reject) => {
-    const form = formidable({
-      keepExtensions: true,
-      filter: part => {
-        return part.mimetype === 'audio/wav' || 
-               part.originalFilename?.endsWith('.wav') || 
-               false;
-      }
-    });
-
-    form.parse(request, (err, _, files) => {
-      if (err) reject(err);
-      resolve({ files });
-    });
-  });
-};
+import { File } from 'undici';
 
 const handler: Handler = async (event, context) => {
   // CORS headers
@@ -52,25 +31,27 @@ const handler: Handler = async (event, context) => {
       throw new Error('OPENAI_API_KEY is not configured');
     }
 
+    if (!event.body || !event.isBase64Encoded) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Invalid request body' })
+      };
+    }
+
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Parse the multipart form data
-    const { files } = await parseFormData(event as any);
-    const file = files.file?.[0];
+    // Convert base64 body to buffer
+    const buffer = Buffer.from(event.body, 'base64');
 
-    if (!file) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: 'No file provided' })
-      };
-    }
+    // Create a File object that OpenAI can process
+    const file = new File([buffer], 'audio.wav', { type: 'audio/wav' });
 
     // Create transcription
     const transcription = await openai.audio.transcriptions.create({
-      file: createReadStream(file.filepath),
+      file,
       model: 'whisper-1',
       language: 'de',
     });

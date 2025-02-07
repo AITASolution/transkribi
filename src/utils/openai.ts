@@ -3,12 +3,18 @@ import { ERROR_MESSAGES } from './constants';
 
 export async function transcribeAudio(audioFile: File): Promise<string> {
   try {
-    const formData = new FormData();
-    formData.append('file', audioFile);
+    // Read the file as ArrayBuffer
+    const arrayBuffer = await audioFile.arrayBuffer();
+    
+    // Convert ArrayBuffer to base64
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
 
     const response = await fetch('/.netlify/functions/transcribe', {
       method: 'POST',
-      body: formData,
+      headers: {
+        'Content-Type': 'audio/wav',
+      },
+      body: base64,
     });
 
     if (!response.ok) {
