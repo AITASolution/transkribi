@@ -13,3 +13,7 @@
 
 [functions]
   node_bundler = "esbuild"
+
+# Disable Next.js plugin
+[build.processing]
+  skip_processing = true
