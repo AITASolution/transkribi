@@ -6,8 +6,10 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
     // Read the file as ArrayBuffer
     const arrayBuffer = await audioFile.arrayBuffer();
     
-    // Convert ArrayBuffer to base64
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    // Convert ArrayBuffer to base64 using browser APIs
+    const uint8Array = new Uint8Array(arrayBuffer);
+    const binaryString = uint8Array.reduce((str, byte) => str + String.fromCharCode(byte), '');
+    const base64 = btoa(binaryString);
 
     const response = await fetch('/.netlify/functions/transcribe', {
       method: 'POST',
