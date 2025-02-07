@@ -6,7 +6,7 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
     const formData = new FormData();
     formData.append('file', audioFile);
 
-    const response = await fetch('http://localhost:3001/api/transcribe', {
+    const response = await fetch('/.netlify/functions/transcribe', {
       method: 'POST',
       body: formData,
     });

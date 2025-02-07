@@ -7,8 +7,8 @@ export async function fetchVideoMetadata(url: string): Promise<string> {
   console.log('🔍 Fetching video metadata for URL:', url);
   
   try {
-    console.log('📡 Making API request to backend...');
-    const response = await fetch('http://localhost:3001/api/instagram', {
+    console.log('📡 Making API request to Netlify function...');
+    const response = await fetch('/.netlify/functions/instagram', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
