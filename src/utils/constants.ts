@@ -17,5 +17,15 @@ export const ERROR_MESSAGES = {
   FILE_CONVERSION: 'Fehler bei der Konvertierung der Datei',
   RATE_LIMIT: 'Das API-Limit wurde erreicht. Bitte warten Sie einen Moment und versuchen Sie es erneut.',
   PAGE_FETCH_ERROR: 'Fehler beim Laden der Instagram-Seite. Bitte versuchen Sie es später erneut.',
-  RAPID_API_KEY_MISSING: 'RapidAPI Key ist nicht konfiguriert'
+  RAPID_API_KEY_MISSING: 'RapidAPI Key ist nicht konfiguriert',
+  // Neue spezifische Fehlermeldungen
+  FILE_TOO_LARGE: 'Die Datei ist zu groß für die Verarbeitung (Maximum: 25MB)',
+  INVALID_FILE_TYPE: 'Nicht unterstütztes Dateiformat',
+  OPENAI_API_ERROR: 'Fehler bei der OpenAI API. Bitte versuchen Sie es später erneut.',
+  NO_AUDIO_CONTENT: 'Keine Audiodaten in der Datei gefunden',
+  NETWORK_ERROR: 'Netzwerkfehler bei der Übertragung. Bitte überprüfen Sie Ihre Internetverbindung.',
+  SERVER_ERROR: 'Serverfehler bei der Verarbeitung. Bitte versuchen Sie es später erneut.',
+  TRANSCRIPTION_TIMEOUT: 'Zeitüberschreitung bei der Transkription. Bitte versuchen Sie es mit einer kürzeren Audiodatei.',
+  TRANSCRIPTION_NO_SPEECH: 'Keine Sprache in der Audiodatei erkannt',
+  INVALID_RESPONSE: 'Ungültige Antwort vom Server erhalten'
 } as const;
