@@ -49,34 +49,49 @@ const handler: Handler = async (event, context) => {
       };
     }
 
-    // Prüfen, ob ein Request-Body vorhanden ist
+    // Parse request body
     if (!event.body) {
       console.error('❌ No request body provided');
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           error: 'Invalid request',
           details: 'Request body is missing'
         })
       };
     }
 
-    if (!event.isBase64Encoded) {
-      console.error('❌ Request body is not base64 encoded');
+    let requestData;
+    try {
+      requestData = JSON.parse(event.body);
+    } catch (error) {
+      console.error('❌ Failed to parse request body as JSON');
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           error: 'Invalid request',
-          details: 'Request body must be base64 encoded'
+          details: 'Request body must be valid JSON'
+        })
+      };
+    }
+
+    if (!requestData.body) {
+      console.error('❌ No base64 data provided');
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          error: 'Invalid request',
+          details: 'Base64 audio data is missing'
         })
       };
     }
 
     // Base64-String in Buffer umwandeln
     console.log('🔄 Converting base64 to buffer');
-    const buffer = Buffer.from(event.body, 'base64');
+    const buffer = Buffer.from(requestData.body, 'base64');
 
     // Dateigröße prüfen
     if (buffer.length > MAX_FILE_SIZE) {

@@ -19,7 +19,10 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: base64
+      body: JSON.stringify({
+        isBase64Encoded: true,
+        body: base64
+      })
     });
 
     // Try to parse error response even if status is not ok
