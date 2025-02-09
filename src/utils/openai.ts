@@ -3,7 +3,19 @@ import { ERROR_MESSAGES } from './constants';
 
 export async function transcribeAudio(audioFile: File): Promise<string> {
   try {
-    console.log('🎙️ Starting transcription for file:', audioFile.name);
+    console.log('🎙️ Starting transcription for file:', {
+      name: audioFile.name,
+      type: audioFile.type,
+      size: audioFile.size,
+      lastModified: new Date(audioFile.lastModified).toISOString()
+    });
+
+    // Validate audio format
+    if (!audioFile.type.includes('audio/wav')) {
+      throw new TranscriptionError(
+        'Ungültiges Audioformat. Es wird WAV-Format erwartet.'
+      );
+    }
     
     // Read the file as ArrayBuffer
     const arrayBuffer = await audioFile.arrayBuffer();
@@ -13,7 +25,10 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
     const binaryString = uint8Array.reduce((str, byte) => str + String.fromCharCode(byte), '');
     const base64 = btoa(binaryString);
 
-    console.log('📡 Sending request to transcription service');
+    console.log('📡 Sending request to transcription service', {
+      dataSize: base64.length,
+      originalSize: arrayBuffer.byteLength
+    });
     const response = await fetch('/.netlify/functions/transcribe', {
       method: 'POST',
       headers: {

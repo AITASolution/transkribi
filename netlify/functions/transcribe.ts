@@ -160,16 +160,46 @@ const handler: Handler = async (event, context) => {
     console.log('🎯 Starting transcription');
     let transcription;
     try {
-      // Create a ReadStream and ensure it's properly closed after use
-      const stream = fs.createReadStream(tmpFilePath);
+      // Log file details before transcription
+      const fileStats = await fs.promises.stat(tmpFilePath);
+      console.log('📝 File details:', {
+        size: fileStats.size,
+        path: tmpFilePath
+      });
+
+      // Verify file exists and is readable
+      await fs.promises.access(tmpFilePath, fs.constants.R_OK);
+      
+      // Create a ReadStream with explicit encoding
+      const stream = fs.createReadStream(tmpFilePath, {
+        encoding: undefined,
+        highWaterMark: 1024 * 1024 // 1MB chunks
+      });
       
       try {
+        // Log the start of OpenAI API call
+        console.log('📡 Calling OpenAI API with parameters:', {
+          model: 'whisper-1',
+          language: 'de',
+          fileSize: fileStats.size
+        });
+
         transcription = await openai.audio.transcriptions.create({
           file: stream,
           model: 'whisper-1',
           language: 'de',
+          response_format: 'json'
         });
+        
         console.log('✅ Transcription successful');
+      } catch (apiError) {
+        console.error('❌ OpenAI API error details:', {
+          error: apiError,
+          message: apiError.message,
+          type: apiError.type,
+          status: apiError.status
+        });
+        throw apiError;
       } finally {
         // Always close the stream
         stream.destroy();
