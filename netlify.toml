@@ -18,6 +18,12 @@
 
 [functions]
   node_bundler = "esbuild"
+  external_node_modules = ["@ffmpeg-installer/ffmpeg", "fluent-ffmpeg"]
+  included_files = ["node_modules/@ffmpeg-installer/ffmpeg/ffmpeg"]
+
+[functions.transcribe]
+  timeout = 30
+  memory = 1024
 
 [[headers]]
   for = "/assets/*"

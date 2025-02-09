@@ -4,9 +4,15 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-type OpenAIError = APIError;
-
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB in bytes
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 second
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+interface FileSystemError extends Error {
+  code?: string;
+}
 
 const handler: Handler = async (event, context) => {
   // CORS headers
@@ -22,7 +28,7 @@ const handler: Handler = async (event, context) => {
 
   console.log('🎙️ Transcription function called');
 
-  // OPTIONS-Anfrage behandeln
+  // Handle OPTIONS request
   if (event.httpMethod === 'OPTIONS') {
     console.log('✅ Handling OPTIONS request');
     return {
@@ -31,40 +37,37 @@ const handler: Handler = async (event, context) => {
     };
   }
 
+  // Validate HTTP method
   if (event.httpMethod !== 'POST') {
     console.log('❌ Invalid HTTP method:', event.httpMethod);
-    console.log('Request details:', {
-      path: event.path,
-      headers: event.headers,
-      queryStringParameters: event.queryStringParameters
-    });
     return {
       statusCode: 405,
       headers,
       body: JSON.stringify({
         error: 'Method not allowed',
         message: 'This endpoint only accepts POST requests for audio transcription',
-        receivedMethod: event.httpMethod,
-        path: event.path
+        receivedMethod: event.httpMethod
       })
     };
   }
 
+  let tmpFilePath = '';
+
   try {
-    // Prüfen, ob der OpenAI API-Schlüssel vorhanden ist
+    // Verify OpenAI API key
     if (!process.env.OPENAI_API_KEY) {
       console.error('❌ OpenAI API key missing');
       return {
         statusCode: 500,
         headers,
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           error: 'Configuration error',
           details: 'OpenAI API key is not configured'
         })
       };
     }
 
-    // Parse request body
+    // Validate request body
     if (!event.body) {
       console.error('❌ No request body provided');
       return {
@@ -77,6 +80,7 @@ const handler: Handler = async (event, context) => {
       };
     }
 
+    // Parse request data
     let requestData;
     try {
       requestData = JSON.parse(event.body);
@@ -92,6 +96,7 @@ const handler: Handler = async (event, context) => {
       };
     }
 
+    // Validate base64 data
     if (!requestData.body || typeof requestData.body !== 'string') {
       console.error('❌ No base64 data provided or invalid format');
       return {
@@ -104,29 +109,21 @@ const handler: Handler = async (event, context) => {
       };
     }
 
-    // Log request data for debugging
-    console.log('📝 Request data received:', {
-      isBase64Encoded: requestData.isBase64Encoded,
-      bodyLength: requestData.body.length
-    });
-
-    // Base64-String in Buffer umwandeln
+    // Convert base64 to buffer
     console.log('🔄 Converting base64 to buffer');
     let buffer: Buffer;
     try {
       buffer = Buffer.from(requestData.body, 'base64');
-
-      // Log buffer details for debugging
       console.log('📝 Buffer created:', {
         length: buffer.length,
         isBuffer: Buffer.isBuffer(buffer)
       });
 
-      // Dateigröße prüfen
+      // Check file size
       if (buffer.length > MAX_FILE_SIZE) {
         console.error('❌ File too large:', buffer.length, 'bytes');
         return {
-          statusCode: 400,
+          statusCode: 413,
           headers,
           body: JSON.stringify({
             error: 'File too large',
@@ -146,118 +143,93 @@ const handler: Handler = async (event, context) => {
       };
     }
 
+    // Initialize OpenAI client
     console.log('📝 Creating OpenAI client');
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Schreibe den Buffer in eine temporäre Datei
-    const tmpDir = os.tmpdir();
-    const tmpFilePath = path.join(tmpDir, `audio_${Date.now()}.wav`);
+    // Create temporary file
+    tmpFilePath = path.join(os.tmpdir(), `audio_${Date.now()}.wav`);
     console.log('📝 Writing temporary file:', tmpFilePath);
     await fs.promises.writeFile(tmpFilePath, buffer);
 
-    console.log('🎯 Starting transcription');
-    let transcription;
-    try {
-      // Log file details before transcription
-      const fileStats = await fs.promises.stat(tmpFilePath);
-      console.log('📝 File details:', {
-        size: fileStats.size,
-        path: tmpFilePath
-      });
+    // Verify file exists and is readable
+    await fs.promises.access(tmpFilePath, fs.constants.R_OK);
+    const fileStats = await fs.promises.stat(tmpFilePath);
+    console.log('📝 File details:', {
+      size: fileStats.size,
+      path: tmpFilePath
+    });
 
-      // Verify file exists and is readable
-      await fs.promises.access(tmpFilePath, fs.constants.R_OK);
-      
-      // Create a ReadStream with explicit encoding
-      const stream = fs.createReadStream(tmpFilePath, {
-        encoding: undefined,
-        highWaterMark: 1024 * 1024 // 1MB chunks
-      });
-      
+    // Implement retry mechanism for OpenAI API calls
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        // Log the start of OpenAI API call
-        console.log('📡 Calling OpenAI API with parameters:', {
+        console.log(`📡 Calling OpenAI API (attempt ${attempt}/${MAX_RETRIES})`, {
           model: 'whisper-1',
           language: 'de',
           fileSize: fileStats.size
         });
 
-        transcription = await openai.audio.transcriptions.create({
-          file: stream,
+        const transcription = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(tmpFilePath),
           model: 'whisper-1',
           language: 'de',
           response_format: 'json'
         });
-        
+
         console.log('✅ Transcription successful');
-      } catch (apiError) {
-        console.error('❌ OpenAI API error details:', {
-          error: apiError,
-          message: apiError.message,
-          type: apiError.type,
-          status: apiError.status
-        });
-        throw apiError;
-      } finally {
-        // Always close the stream
-        stream.destroy();
+
+        // Clean up temporary file
+        try {
+          await fs.promises.unlink(tmpFilePath);
+          console.log('🧹 Temporary file cleaned up');
+          tmpFilePath = '';
+        } catch (err) {
+          console.error('Failed to delete temporary file:', err);
+        }
+
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ text: transcription.text })
+        };
+      } catch (error) {
+        lastError = error as Error;
+        console.error(`❌ OpenAI API error (attempt ${attempt}/${MAX_RETRIES}):`, error);
+
+        if (error instanceof APIError) {
+          // Don't retry on certain errors
+          if (['invalid_request_error', 'invalid_api_key'].includes(error.code || '')) {
+            throw error;
+          }
+        }
+
+        if (attempt < MAX_RETRIES) {
+          console.log(`⏳ Waiting ${RETRY_DELAY}ms before retry...`);
+          await wait(RETRY_DELAY);
+        }
       }
-    } catch (error) {
-      console.error('❌ OpenAI transcription error:', error);
-      
-      // Log detailed error information
-      if (error.response) {
-        console.error('OpenAI API response:', {
-          status: error.response.status,
-          statusText: error.response.statusText,
-          data: error.response.data
-        });
-      }
-      
-      // Clean up the temporary file before throwing
-      await fs.promises.unlink(tmpFilePath).catch(err => {
-        console.error('Failed to delete temporary file:', err);
-      });
-      
-      // Throw a more specific error
-      throw new Error(
-        error.response?.data?.error?.message ||
-        error.message ||
-        'Unknown transcription error'
-      );
     }
 
-    // Clean up the temporary file
-    try {
-      await fs.promises.unlink(tmpFilePath);
-      console.log('🧹 Temporary file cleaned up');
-    } catch (error) {
-      console.error('Failed to delete temporary file:', error);
-      // Continue since transcription was successful
-    }
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ text: transcription.text })
-    };
+    // If we get here, all retries failed
+    throw lastError || new Error('All transcription attempts failed');
 
   } catch (error) {
     console.error('❌ Transcription error:', error);
-    
-    // Zusätzliche Log-Ausgabe, falls ein Response-Body vorhanden ist
-    if (error.response) {
+
+    // Clean up temporary file if it exists
+    if (tmpFilePath) {
       try {
-        const responseBody = await error.response.text();
-        console.error('Response body:', responseBody);
-      } catch (innerError) {
-        console.error('Failed to parse error response body');
+        await fs.promises.unlink(tmpFilePath);
+        console.log('🧹 Temporary file cleaned up');
+      } catch (cleanupError) {
+        console.error('Failed to delete temporary file:', cleanupError);
       }
     }
-    
-    // Enhanced error handling
+
+    // Handle OpenAI API errors
     if (error instanceof APIError) {
       console.error('OpenAI API Error:', {
         status: error.status,
@@ -266,11 +238,10 @@ const handler: Handler = async (event, context) => {
         type: error.type,
         details: error.error
       });
-      
-      // Handle specific OpenAI error cases
+
       let errorDetails = error.message;
       let statusCode = error.status || 500;
-      
+
       switch (error.code) {
         case 'invalid_request_error':
           statusCode = 400;
@@ -280,12 +251,16 @@ const handler: Handler = async (event, context) => {
           statusCode = 429;
           errorDetails = 'API rate limit exceeded. Please try again later';
           break;
+        case 'invalid_api_key':
+          statusCode = 401;
+          errorDetails = 'Invalid API key configuration';
+          break;
         case 'file_too_large':
           statusCode = 413;
           errorDetails = 'Audio file is too large for processing';
           break;
       }
-      
+
       return {
         statusCode,
         headers,
@@ -297,9 +272,10 @@ const handler: Handler = async (event, context) => {
         })
       };
     }
-    
+
     // Handle file system errors
-    if (error.code && ['ENOENT', 'EACCES', 'EBADF'].includes(error.code)) {
+    const fsError = error as FileSystemError;
+    if (fsError.code && ['ENOENT', 'EACCES', 'EBADF'].includes(fsError.code)) {
       console.error('File system error:', error);
       return {
         statusCode: 500,
@@ -307,20 +283,19 @@ const handler: Handler = async (event, context) => {
         body: JSON.stringify({
           error: 'File Processing Error',
           details: 'Failed to process audio file',
-          code: error.code
+          code: fsError.code
         })
       };
     }
-    
-    // Generic error handler
-    console.error('Unhandled error:', error);
+
+    // Generic error response
     return {
       statusCode: 500,
       headers,
       body: JSON.stringify({
         error: 'Transcription Failed',
         details: error instanceof Error ? error.message : 'Unknown server error',
-        id: context.awsRequestId // Include request ID for tracking
+        id: context.awsRequestId
       })
     };
   }
