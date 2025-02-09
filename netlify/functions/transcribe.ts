@@ -1,10 +1,28 @@
 import { Handler } from '@netlify/functions';
 import OpenAI from 'openai';
-import { File } from 'undici';
+import { Readable } from 'stream';
+
+// Custom Stream-Klasse, die zusätzlich 'path' und 'mimeType' definiert
+class BufferStream extends Readable {
+  path: string;
+  mimeType: string;
+  
+  constructor(buffer: Buffer, path: string, mimeType: string) {
+    super();
+    this.path = path;
+    this.mimeType = mimeType;
+    // Schiebe den gesamten Buffer in den Stream und signalisiere das Ende
+    this.push(buffer);
+    this.push(null);
+  }
+  
+  _read() {
+    // Keine weitere Implementierung nötig, da der Buffer schon gestreamt wurde
+  }
+}
 
 // Constants
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB in bytes
-const SUPPORTED_MIME_TYPES = ['audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/flac'];
 
 const handler: Handler = async (event, context) => {
   // CORS headers
@@ -96,14 +114,12 @@ const handler: Handler = async (event, context) => {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Create a File object that OpenAI can process
-    console.log('📁 Creating file object');
-    const file = new File([buffer], 'audio.wav', { type: 'audio/wav' });
+    // Verwende die custom BufferStream-Klasse, um den Buffer als Stream zu verpacken
+    const stream = new BufferStream(buffer, 'audio.wav', 'audio/wav');
 
-    // Create transcription
     console.log('🎯 Starting transcription');
     const transcription = await openai.audio.transcriptions.create({
-      file,
+      file: stream,
       model: 'whisper-1',
       language: 'de',
     });
@@ -118,7 +134,17 @@ const handler: Handler = async (event, context) => {
   } catch (error) {
     console.error('❌ Transcription error:', error);
     
-    // Handle OpenAI API errors
+    // Zusätzliche Log-Ausgabe, falls ein Response-Body vorhanden ist
+    if (error.response) {
+      try {
+        const responseBody = await error.response.text();
+        console.error('Response body:', responseBody);
+      } catch (innerError) {
+        console.error('Failed to parse error response body');
+      }
+    }
+    
+    // Behandlung von OpenAI API-Fehlern
     if (error instanceof OpenAI.APIError) {
       console.error('OpenAI API Error:', {
         status: error.status,
@@ -139,7 +165,7 @@ const handler: Handler = async (event, context) => {
       };
     }
     
-    // Handle other errors
+    // Behandlung anderer Fehler
     return {
       statusCode: 500,
       headers,
