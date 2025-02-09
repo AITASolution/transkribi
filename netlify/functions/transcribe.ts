@@ -90,31 +90,56 @@ const handler: Handler = async (event, context) => {
       };
     }
 
-    if (!requestData.body) {
-      console.error('❌ No base64 data provided');
+    if (!requestData.body || typeof requestData.body !== 'string') {
+      console.error('❌ No base64 data provided or invalid format');
       return {
         statusCode: 400,
         headers,
         body: JSON.stringify({
           error: 'Invalid request',
-          details: 'Base64 audio data is missing'
+          details: 'Base64 audio data is missing or invalid'
         })
       };
     }
 
+    // Log request data for debugging
+    console.log('📝 Request data received:', {
+      isBase64Encoded: requestData.isBase64Encoded,
+      bodyLength: requestData.body.length
+    });
+
     // Base64-String in Buffer umwandeln
     console.log('🔄 Converting base64 to buffer');
-    const buffer = Buffer.from(requestData.body, 'base64');
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(requestData.body, 'base64');
 
-    // Dateigröße prüfen
-    if (buffer.length > MAX_FILE_SIZE) {
-      console.error('❌ File too large:', buffer.length, 'bytes');
+      // Log buffer details for debugging
+      console.log('📝 Buffer created:', {
+        length: buffer.length,
+        isBuffer: Buffer.isBuffer(buffer)
+      });
+
+      // Dateigröße prüfen
+      if (buffer.length > MAX_FILE_SIZE) {
+        console.error('❌ File too large:', buffer.length, 'bytes');
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({
+            error: 'File too large',
+            details: `File size exceeds maximum of ${MAX_FILE_SIZE} bytes`
+          })
+        };
+      }
+    } catch (error) {
+      console.error('❌ Error converting base64 to buffer:', error);
       return {
         statusCode: 400,
         headers,
         body: JSON.stringify({
-          error: 'File too large',
-          details: `File size exceeds maximum of ${MAX_FILE_SIZE} bytes`
+          error: 'Invalid request',
+          details: 'Failed to process base64 audio data'
         })
       };
     }
@@ -134,16 +159,31 @@ const handler: Handler = async (event, context) => {
     const stream = fs.createReadStream(tmpFilePath);
 
     console.log('🎯 Starting transcription');
-    const transcription = await openai.audio.transcriptions.create({
-      file: stream,
-      model: 'whisper-1',
-      language: 'de',
-    });
+    let transcription;
+    try {
+      transcription = await openai.audio.transcriptions.create({
+        file: stream,
+        model: 'whisper-1',
+        language: 'de',
+      });
+      console.log('✅ Transcription successful');
+    } catch (error) {
+      console.error('❌ OpenAI transcription error:', error);
+      // Clean up the temporary file before throwing
+      await fs.promises.unlink(tmpFilePath).catch(err => {
+        console.error('Failed to delete temporary file:', err);
+      });
+      throw error; // Will be caught by outer try-catch
+    }
 
-    console.log('✅ Transcription successful');
-
-    // Lösche die temporäre Datei (optional)
-    await fs.promises.unlink(tmpFilePath);
+    // Clean up the temporary file
+    try {
+      await fs.promises.unlink(tmpFilePath);
+      console.log('🧹 Temporary file cleaned up');
+    } catch (error) {
+      console.error('Failed to delete temporary file:', error);
+      // Continue since transcription was successful
+    }
 
     return {
       statusCode: 200,

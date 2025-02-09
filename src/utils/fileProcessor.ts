@@ -3,8 +3,13 @@ import { transcribeAudio } from './openai';
 import { FileProcessingError } from './errors';
 import { ERROR_MESSAGES } from './constants';
 
-const MAX_FILE_SIZE = 26214400; // 25 MB in Bytes
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB in bytes
 const SUPPORTED_AUDIO_TYPES = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/flac'];
+
+// Helper function to format file size in MB
+function formatFileSize(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 /**
  * Splits audio at optimal points using Web Audio API
@@ -178,13 +183,19 @@ async function transcribeWithSplitting(file: File): Promise<string> {
     const currentPart = parts.shift()!;
 
     if (currentPart.size > MAX_FILE_SIZE) {
-      console.log(`⚠️ File size (${currentPart.size} bytes) exceeds limit. Splitting file...`);
+      console.log(`⚠️ File size (${formatFileSize(currentPart.size)}) exceeds limit of ${formatFileSize(MAX_FILE_SIZE)}. Splitting file...`);
       try {
         const [firstHalf, secondHalf] = await splitAudioFile(currentPart);
+        console.log('📝 Split file into parts:', {
+          firstHalf: { size: formatFileSize(firstHalf.size) },
+          secondHalf: { size: formatFileSize(secondHalf.size) }
+        });
         parts.push(firstHalf, secondHalf);
       } catch (error) {
         console.error('Error splitting audio:', error);
-        throw new FileProcessingError('Failed to split audio file properly');
+        throw new FileProcessingError(
+          `Datei konnte nicht aufgeteilt werden. Die Datei ist ${formatFileSize(currentPart.size)} groß, maximal erlaubt sind ${formatFileSize(MAX_FILE_SIZE)} pro Teil.`
+        );
       }
     } else {
       console.log(`🎙️ Transcribing file (${currentPart.size} bytes)...`);
@@ -220,16 +231,38 @@ export async function processFile(file: File): Promise<string> {
       throw new FileProcessingError(`Unsupported file format: ${file.type}`);
     }
 
-    console.log('🎙️ Starting transcription process...');
+    // Log file details before starting transcription
+    console.log('🎙️ Starting transcription process for:', {
+      name: audioFile.name,
+      type: audioFile.type,
+      size: formatFileSize(audioFile.size)
+    });
+
     const transcription = await transcribeWithSplitting(audioFile);
-    console.log('✅ Transcription completed');
+    
+    // Log success with transcription length
+    console.log('✅ Transcription completed:', {
+      length: transcription.length,
+      wordCount: transcription.split(/\s+/).length
+    });
 
     return transcription;
   } catch (error) {
-    console.error('❌ Error processing file:', error);
+    console.error('❌ Error processing file:', {
+      name: file.name,
+      type: file.type,
+      size: formatFileSize(file.size),
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+
     if (error instanceof FileProcessingError) {
       throw error;
     }
-    throw new FileProcessingError(ERROR_MESSAGES.FILE_PROCESSING, error);
+
+    // Include file details in error message
+    throw new FileProcessingError(
+      `${ERROR_MESSAGES.FILE_PROCESSING} (${file.name}, ${formatFileSize(file.size)})`,
+      error
+    );
   }
 }

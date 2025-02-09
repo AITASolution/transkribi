@@ -25,48 +25,57 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
       })
     });
 
-    // Try to parse error response even if status is not ok
-    let errorData;
-    let responseText;
-    
+    // Parse response
+    let responseData;
     try {
-      responseText = await response.text();
-      errorData = JSON.parse(responseText);
-    } catch (parseError) {
-      console.error('Failed to parse response:', responseText);
-      // If response is not JSON, use the raw text as error message
-      errorData = { error: responseText || 'Unknown error' };
+      const responseText = await response.text();
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('Failed to parse response as JSON:', responseText);
+        throw new TranscriptionError('Ungültige Antwort vom Server');
+      }
+    } catch (error) {
+      console.error('Failed to read response:', error);
+      throw new TranscriptionError('Fehler beim Lesen der Server-Antwort');
     }
 
     if (!response.ok) {
       console.error('Transcription request failed:', {
         status: response.status,
         statusText: response.statusText,
-        error: errorData
+        error: responseData
       });
 
       // Handle specific error cases
-      if (response.status === 413) {
-        throw new TranscriptionError('Die Datei ist zu groß für die Verarbeitung');
+      switch (response.status) {
+        case 413:
+          throw new TranscriptionError('Die Datei ist zu groß für die Verarbeitung');
+        case 400:
+          if (responseData.error === 'File too large') {
+            throw new TranscriptionError('Die Audiodatei überschreitet die maximale Größe');
+          }
+          throw new TranscriptionError(responseData.details || 'Ungültige Anfrage');
+        case 500:
+          if (responseData.error === 'OpenAI API Error') {
+            throw new TranscriptionError(`OpenAI API Fehler: ${responseData.details}`);
+          }
+          throw new TranscriptionError('Interner Serverfehler');
+        default:
+          throw new TranscriptionError(
+            responseData.details || responseData.error || ERROR_MESSAGES.TRANSCRIPTION
+          );
       }
-      
-      if (errorData.error === 'OpenAI API Error') {
-        throw new TranscriptionError(`OpenAI API Fehler: ${errorData.details}`);
-      }
-
-      throw new TranscriptionError(
-        errorData.details || errorData.error || ERROR_MESSAGES.TRANSCRIPTION
-      );
     }
 
-    // At this point we know we have valid JSON from a successful response
-    if (!errorData.text) {
-      console.error('No transcription in response:', errorData);
-      throw new TranscriptionError('Keine Transkription erhalten');
+    // Validate successful response
+    if (!responseData.text) {
+      console.error('No transcription in response:', responseData);
+      throw new TranscriptionError('Keine Transkription in der Server-Antwort');
     }
 
     console.log('✅ Transcription successful');
-    return errorData.text;
+    return responseData.text;
 
   } catch (error) {
     console.error('❌ Transcription error:', error);
