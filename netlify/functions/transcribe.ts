@@ -12,7 +12,10 @@ const handler: Handler = async (event, context) => {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
   };
 
   console.log('🎙️ Transcription function called');
@@ -28,10 +31,20 @@ const handler: Handler = async (event, context) => {
 
   if (event.httpMethod !== 'POST') {
     console.log('❌ Invalid HTTP method:', event.httpMethod);
+    console.log('Request details:', {
+      path: event.path,
+      headers: event.headers,
+      queryStringParameters: event.queryStringParameters
+    });
     return {
       statusCode: 405,
       headers,
-      body: JSON.stringify({ error: 'Method not allowed' })
+      body: JSON.stringify({
+        error: 'Method not allowed',
+        message: 'This endpoint only accepts POST requests for audio transcription',
+        receivedMethod: event.httpMethod,
+        path: event.path
+      })
     };
   }
 
