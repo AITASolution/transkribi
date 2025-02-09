@@ -79,21 +79,23 @@ function convertToMp3(audioData: Float32Array): Uint8Array {
   }
 
   // Encode samples in chunks
-  const mp3Data: Int8Array[] = [];
+  const mp3Data: Uint8Array[] = [];
   const sampleBlockSize = 1152; // Must be multiple of 576 for MP3
   
   for (let i = 0; i < samples.length; i += sampleBlockSize) {
     const sampleChunk = samples.subarray(i, i + sampleBlockSize);
     const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
     if (mp3buf.length > 0) {
-      mp3Data.push(mp3buf);
+      // Convert Int8Array to Uint8Array
+      mp3Data.push(new Uint8Array(mp3buf));
     }
   }
 
   // Get the last chunk of encoded data
   const finalMp3buf = mp3encoder.flush();
   if (finalMp3buf.length > 0) {
-    mp3Data.push(finalMp3buf);
+    // Convert Int8Array to Uint8Array
+    mp3Data.push(new Uint8Array(finalMp3buf));
   }
 
   // Calculate total length
