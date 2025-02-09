@@ -109,14 +109,23 @@ const handler: Handler = async (event, context) => {
       };
     }
 
-    // Convert base64 to buffer
+    // Convert base64 to buffer with validation
     console.log('🔄 Converting base64 to buffer');
     let buffer: Buffer;
     try {
-      buffer = Buffer.from(requestData.body, 'base64');
+      // Remove any potential data URL prefix
+      const base64Data = requestData.body.replace(/^data:audio\/\w+;base64,/, '');
+      buffer = Buffer.from(base64Data, 'base64');
+
+      // Validate buffer integrity
+      if (buffer.length === 0) {
+        throw new Error('Empty buffer after base64 conversion');
+      }
+
       console.log('📝 Buffer created:', {
         length: buffer.length,
-        isBuffer: Buffer.isBuffer(buffer)
+        isBuffer: Buffer.isBuffer(buffer),
+        base64Length: base64Data.length
       });
 
       // Check file size
@@ -138,7 +147,7 @@ const handler: Handler = async (event, context) => {
         headers,
         body: JSON.stringify({
           error: 'Invalid request',
-          details: 'Failed to process base64 audio data'
+          details: 'Failed to process base64 audio data: ' + (error instanceof Error ? error.message : 'Unknown error')
         })
       };
     }
@@ -149,9 +158,12 @@ const handler: Handler = async (event, context) => {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Create temporary file
-    tmpFilePath = path.join(os.tmpdir(), `audio_${Date.now()}.wav`);
+    // Create temporary file with unique name
+    const timestamp = Date.now();
+    const randomString = Math.random().toString(36).substring(7);
+    tmpFilePath = path.join(os.tmpdir(), `audio_${timestamp}_${randomString}.wav`);
     console.log('📝 Writing temporary file:', tmpFilePath);
+    
     await fs.promises.writeFile(tmpFilePath, buffer);
 
     // Verify file exists and is readable

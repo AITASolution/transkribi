@@ -22,13 +22,24 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
     
     // Convert ArrayBuffer to base64 using browser APIs
     const uint8Array = new Uint8Array(arrayBuffer);
-    const binaryString = uint8Array.reduce((str, byte) => str + String.fromCharCode(byte), '');
-    const base64 = btoa(binaryString);
+    const chunks: string[] = [];
+    const chunkSize = 0x8000; // Process in smaller chunks to avoid memory issues
+
+    // Process the data in chunks
+    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+      const chunk = uint8Array.slice(i, i + chunkSize);
+      const binaryString = chunk.reduce((str, byte) => str + String.fromCharCode(byte), '');
+      chunks.push(binaryString);
+    }
+
+    const base64 = btoa(chunks.join(''));
 
     console.log('📡 Sending request to transcription service', {
       dataSize: base64.length,
-      originalSize: arrayBuffer.byteLength
+      originalSize: arrayBuffer.byteLength,
+      chunks: chunks.length
     });
+
     const response = await fetch('/.netlify/functions/transcribe', {
       method: 'POST',
       headers: {
@@ -40,28 +51,35 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
       })
     });
 
-    // Parse response
+    // Get the raw response text first
+    const responseText = await response.text();
+    console.log('Server response status:', response.status);
+    console.log('Server response headers:', Object.fromEntries(response.headers.entries()));
+    console.log('Raw server response:', responseText);
+
+    // Try to parse as JSON if possible
     let responseData;
     try {
-      const responseText = await response.text();
-      console.log('Server response:', responseText); // Log raw response for debugging
+      responseData = responseText ? JSON.parse(responseText) : null;
+    } catch (parseError) {
+      console.error('Failed to parse response as JSON:', {
+        text: responseText,
+        error: parseError
+      });
       
-      try {
-        responseData = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('Failed to parse response as JSON:', responseText);
+      // If response is not OK and we couldn't parse JSON, throw a more specific error
+      if (!response.ok) {
         throw new TranscriptionError(
-          `Ungültige Antwort vom Server: ${responseText.substring(0, 100)}...`
+          `Server returned ${response.status} ${response.statusText}${responseText ? ': ' + responseText : ''}`
         );
       }
-    } catch (error) {
-      console.error('Failed to read response:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unbekannter Fehler';
+      
       throw new TranscriptionError(
-        `Fehler beim Lesen der Server-Antwort: ${errorMessage}`
+        `Ungültige Antwort vom Server: ${responseText ? responseText.substring(0, 100) + '...' : 'Empty response'}`
       );
     }
 
+    // Handle non-200 responses
     if (!response.ok) {
       console.error('Transcription request failed:', {
         status: response.status,
@@ -76,30 +94,30 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
             'Die Datei ist zu groß für die Verarbeitung. Maximale Größe: 25MB'
           );
         case 400:
-          if (responseData.error === 'File too large') {
+          if (responseData?.error === 'File too large') {
             throw new TranscriptionError(
               'Die Audiodatei überschreitet die maximale Größe von 25MB'
             );
           }
-          if (responseData.code === 'invalid_request_error') {
+          if (responseData?.code === 'invalid_request_error') {
             throw new TranscriptionError(
               'Das Audioformat wird nicht unterstützt oder die Datei ist beschädigt'
             );
           }
           throw new TranscriptionError(
-            responseData.details || 'Ungültige Anfrage. Bitte überprüfen Sie das Audioformat.'
+            responseData?.details || 'Ungültige Anfrage. Bitte überprüfen Sie das Audioformat.'
           );
         case 429:
           throw new TranscriptionError(
             'API-Limit erreicht. Bitte versuchen Sie es in einigen Minuten erneut.'
           );
         case 500:
-          if (responseData.error === 'OpenAI API Error') {
+          if (responseData?.error === 'OpenAI API Error') {
             throw new TranscriptionError(
               `OpenAI API Fehler: ${responseData.details}. Bitte versuchen Sie es erneut.`
             );
           }
-          if (responseData.error === 'File Processing Error') {
+          if (responseData?.error === 'File Processing Error') {
             throw new TranscriptionError(
               'Fehler bei der Verarbeitung der Audiodatei. Bitte überprüfen Sie das Format.'
             );
@@ -109,15 +127,15 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
           );
         default:
           throw new TranscriptionError(
-            responseData.details ||
-            responseData.error ||
+            responseData?.details ||
+            responseData?.error ||
             `Ein unerwarteter Fehler ist aufgetreten (Status: ${response.status})`
           );
       }
     }
 
     // Validate successful response
-    if (!responseData.text) {
+    if (!responseData?.text) {
       console.error('No transcription in response:', responseData);
       throw new TranscriptionError('Keine Transkription in der Server-Antwort');
     }
