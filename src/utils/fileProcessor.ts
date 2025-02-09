@@ -2,7 +2,7 @@ import { convertVideoToMp3 } from './videoConverter';
 import { transcribeAudio } from './openai';
 import { FileProcessingError } from './errors';
 import { ERROR_MESSAGES } from './constants';
-import lamejs from 'lamejs';
+import lamejs from '@breezystack/lamejs';
 
 // Configuration constants
 const MAX_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB Netlify limit
@@ -236,12 +236,14 @@ async function chunkToMp3File(chunk: AudioChunk, originalFile: File): Promise<Fi
       mp3Data.push(finalMp3buf);
     }
 
-    // Combine all chunks
+    // Combine all chunks and convert to Int8Array
     const totalLength = mp3Data.reduce((acc, buf) => acc + buf.length, 0);
-    const combinedMp3Data = new Uint8Array(totalLength);
+    const combinedMp3Data = new Int8Array(totalLength);
     let offset = 0;
     for (const buf of mp3Data) {
-      combinedMp3Data.set(buf, offset);
+      // Convert Uint8Array to Int8Array if needed
+      const int8Buf = buf instanceof Int8Array ? buf : new Int8Array(buf);
+      combinedMp3Data.set(int8Buf, offset);
       offset += buf.length;
     }
 

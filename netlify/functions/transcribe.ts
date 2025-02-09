@@ -21,6 +21,16 @@ interface RequestMetadata {
   attempt?: number;
 }
 
+interface ErrorResponse {
+  error: string;
+  details: string;
+  id: string;
+  metadata: RequestMetadata;
+  timestamp: string;
+  code?: string;
+  type?: string;
+}
+
 const handler: Handler = async (event, context) => {
   // CORS headers
   const headers = {
@@ -322,17 +332,62 @@ const handler: Handler = async (event, context) => {
       };
     }
 
-    // Generic error response
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({
-        error: 'Transcription Failed',
-        details: error instanceof Error ? error.message : 'Unknown server error',
-        id: context.awsRequestId,
-        metadata: requestMetadata
-      })
+    // Enhanced error handling with better details
+    let errorResponse: ErrorResponse = {
+      error: 'Transcription Failed',
+      details: error instanceof Error ? error.message : 'Unknown server error',
+      id: context.awsRequestId,
+      metadata: requestMetadata,
+      timestamp: new Date().toISOString()
     };
+
+    // Log detailed error information
+    console.error('Detailed error information:', {
+      error: error instanceof Error ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      } : error,
+      metadata: requestMetadata,
+      requestId: context.awsRequestId
+    });
+
+    // Add additional context if available
+    if (error instanceof APIError) {
+      errorResponse = {
+        ...errorResponse,
+        code: error.code || 'unknown_error',
+        type: error.type || 'server_error'
+      };
+    } else if (error instanceof Error && 'code' in error) {
+      errorResponse = {
+        ...errorResponse,
+        code: (error as any).code,
+        type: 'server_error'
+      };
+    }
+
+    // Ensure response is always JSON
+    try {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify(errorResponse)
+      };
+    } catch (jsonError) {
+      console.error('Failed to stringify error response:', jsonError);
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          error: 'Internal Server Error',
+          details: 'Failed to format error response',
+          id: context.awsRequestId,
+          metadata: requestMetadata,
+          timestamp: new Date().toISOString()
+        })
+      };
+    }
   }
 };
 
