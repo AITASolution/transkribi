@@ -4,8 +4,8 @@ import { FileProcessingError } from './errors';
 import { ERROR_MESSAGES } from './constants';
 import lamejs from 'lamejs';
 
-// Adjusted for Netlify's limits (4MB effective limit for binary data)
-const MAX_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
+// Configuration constants
+const MAX_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB Netlify limit
 const SUPPORTED_AUDIO_TYPES = ['audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/flac'];
 const MIN_CHUNK_DURATION = 3; // Minimum 3 seconds per chunk
 const OVERLAP_DURATION = 1; // 1 second overlap between chunks
@@ -13,6 +13,7 @@ const SILENCE_THRESHOLD = -50; // dB threshold for silence detection
 const MIN_SILENCE_DURATION = 0.5; // Minimum silence duration in seconds
 const TARGET_SAMPLE_RATE = 16000; // 16kHz for optimal transcription
 const MP3_BITRATE = 64; // 64kbps for good quality while keeping size small
+const MP3_CHANNELS = 1; // Mono
 
 // Helper function to format file size in MB
 function formatFileSize(bytes: number): string {
@@ -116,8 +117,8 @@ async function splitAudioIntoChunks(file: File): Promise<AudioChunk[]> {
     const silencePoints = detectSilence(monoData, audioBuffer.sampleRate);
     console.log(`Found ${silencePoints.length} potential split points`);
 
-    // Calculate chunk parameters
-    const bytesPerSecond = MP3_BITRATE * 1024 / 8; // Convert bitrate to bytes/second
+    // Calculate chunk parameters based on MP3 bitrate
+    const bytesPerSecond = (MP3_BITRATE * 1024) / 8; // Convert bitrate to bytes/second
     const maxChunkDuration = MAX_CHUNK_SIZE / bytesPerSecond;
     const chunks: AudioChunk[] = [];
     let chunkId = 0;
@@ -211,11 +212,16 @@ async function chunkToMp3File(chunk: AudioChunk, originalFile: File): Promise<Fi
     }
 
     // Initialize MP3 encoder
-    const mp3encoder = new lamejs.Mp3Encoder(1, chunk.sampleRate, MP3_BITRATE);
-    const mp3Data: Int8Array[] = [];
+    const mp3encoder = new lamejs.Mp3Encoder(
+      MP3_CHANNELS,
+      chunk.sampleRate,
+      MP3_BITRATE
+    );
 
     // Encode in chunks of 1152 samples (required by MP3 format)
+    const mp3Data: Int8Array[] = [];
     const sampleBlockSize = 1152;
+    
     for (let i = 0; i < samples.length; i += sampleBlockSize) {
       const sampleChunk = samples.subarray(i, i + sampleBlockSize);
       const mp3buf = mp3encoder.encodeBuffer(sampleChunk);

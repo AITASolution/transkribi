@@ -1,6 +1,11 @@
 import { ERROR_MESSAGES } from './constants';
 import lamejs from 'lamejs';
 
+// MP3 encoding configuration
+const MP3_SAMPLE_RATE = 16000; // 16kHz for Whisper
+const MP3_BITRATE = 64; // 64kbps
+const MP3_CHANNELS = 1; // Mono
+
 export async function convertVideoToMp3(videoFile: File): Promise<File> {
   console.log('🔄 Starting video to MP3 conversion...');
   
@@ -15,15 +20,15 @@ export async function convertVideoToMp3(videoFile: File): Promise<File> {
     const audioBuffer = await audioContext.decodeAudioData(videoData);
     
     // Convert to mono and resample to 16kHz
-    const targetSampleRate = 16000;
-    const resampledBuffer = resampleAndConvertToMono(audioBuffer, targetSampleRate);
+    const resampledData = resampleAndConvertToMono(audioBuffer, MP3_SAMPLE_RATE);
     
     // Convert to MP3
-    const mp3Data = convertToMp3(resampledBuffer, targetSampleRate);
+    const mp3Data = convertToMp3(resampledData);
     
     // Create MP3 file
     const mp3Blob = new Blob([mp3Data], { type: 'audio/mp3' });
-    const mp3File = new File([mp3Blob], 'converted.mp3', { type: 'audio/mp3' });
+    const fileName = videoFile.name.replace(/\.[^/.]+$/, ''); // Remove extension
+    const mp3File = new File([mp3Blob], `${fileName}.mp3`, { type: 'audio/mp3' });
     
     console.log('✅ Conversion completed successfully');
     return mp3File;
@@ -57,11 +62,13 @@ function resampleAndConvertToMono(audioBuffer: AudioBuffer, targetSampleRate: nu
   return resampledData;
 }
 
-function convertToMp3(audioData: Float32Array, sampleRate: number): Uint8Array {
-  // Configure MP3 encoder
-  const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, 128); // mono, 16kHz, 128kbps
-  const sampleBlockSize = 1152; // Must be multiple of 576 for MP3
-  const mp3Data: Int8Array[] = [];
+function convertToMp3(audioData: Float32Array): Uint8Array {
+  // Initialize MP3 encoder
+  const mp3encoder = new lamejs.Mp3Encoder(
+    MP3_CHANNELS, // mono
+    MP3_SAMPLE_RATE,
+    MP3_BITRATE
+  );
 
   // Convert Float32Array to Int16Array (required by the encoder)
   const samples = new Int16Array(audioData.length);
@@ -71,7 +78,10 @@ function convertToMp3(audioData: Float32Array, sampleRate: number): Uint8Array {
     samples[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
   }
 
-  // Encode samples
+  // Encode samples in chunks
+  const mp3Data: Int8Array[] = [];
+  const sampleBlockSize = 1152; // Must be multiple of 576 for MP3
+  
   for (let i = 0; i < samples.length; i += sampleBlockSize) {
     const sampleChunk = samples.subarray(i, i + sampleBlockSize);
     const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
