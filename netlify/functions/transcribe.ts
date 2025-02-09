@@ -1,27 +1,9 @@
 import { Handler } from '@netlify/functions';
 import OpenAI from 'openai';
-import { Readable } from 'stream';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
-// Custom Stream-Klasse, die zusätzlich 'path' und 'mimeType' definiert
-class BufferStream extends Readable {
-  path: string;
-  mimeType: string;
-  
-  constructor(buffer: Buffer, path: string, mimeType: string) {
-    super();
-    this.path = path;
-    this.mimeType = mimeType;
-    // Schiebe den gesamten Buffer in den Stream und signalisiere das Ende
-    this.push(buffer);
-    this.push(null);
-  }
-  
-  _read() {
-    // Keine weitere Implementierung nötig, da der Buffer schon gestreamt wurde
-  }
-}
-
-// Constants
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB in bytes
 
 const handler: Handler = async (event, context) => {
@@ -35,7 +17,7 @@ const handler: Handler = async (event, context) => {
 
   console.log('🎙️ Transcription function called');
 
-  // Handle OPTIONS request
+  // OPTIONS-Anfrage behandeln
   if (event.httpMethod === 'OPTIONS') {
     console.log('✅ Handling OPTIONS request');
     return {
@@ -54,7 +36,7 @@ const handler: Handler = async (event, context) => {
   }
 
   try {
-    // Validate OpenAI API key
+    // Prüfen, ob der OpenAI API-Schlüssel vorhanden ist
     if (!process.env.OPENAI_API_KEY) {
       console.error('❌ OpenAI API key missing');
       return {
@@ -67,7 +49,7 @@ const handler: Handler = async (event, context) => {
       };
     }
 
-    // Validate request body
+    // Prüfen, ob ein Request-Body vorhanden ist
     if (!event.body) {
       console.error('❌ No request body provided');
       return {
@@ -92,11 +74,11 @@ const handler: Handler = async (event, context) => {
       };
     }
 
-    // Convert base64 body to buffer
+    // Base64-String in Buffer umwandeln
     console.log('🔄 Converting base64 to buffer');
     const buffer = Buffer.from(event.body, 'base64');
 
-    // Check file size
+    // Dateigröße prüfen
     if (buffer.length > MAX_FILE_SIZE) {
       console.error('❌ File too large:', buffer.length, 'bytes');
       return {
@@ -114,8 +96,14 @@ const handler: Handler = async (event, context) => {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Verwende die custom BufferStream-Klasse, um den Buffer als Stream zu verpacken
-    const stream = new BufferStream(buffer, 'audio.wav', 'audio/wav');
+    // Schreibe den Buffer in eine temporäre Datei
+    const tmpDir = os.tmpdir();
+    const tmpFilePath = path.join(tmpDir, `audio_${Date.now()}.wav`);
+    console.log('📝 Writing temporary file:', tmpFilePath);
+    await fs.promises.writeFile(tmpFilePath, buffer);
+
+    // Erstelle einen ReadStream aus der temporären Datei
+    const stream = fs.createReadStream(tmpFilePath);
 
     console.log('🎯 Starting transcription');
     const transcription = await openai.audio.transcriptions.create({
@@ -125,6 +113,10 @@ const handler: Handler = async (event, context) => {
     });
 
     console.log('✅ Transcription successful');
+
+    // Lösche die temporäre Datei (optional)
+    await fs.promises.unlink(tmpFilePath);
+
     return {
       statusCode: 200,
       headers,
