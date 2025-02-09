@@ -1,15 +1,18 @@
-import { convertVideoToWav } from './videoConverter';
+import { convertVideoToMp3 } from './videoConverter';
 import { transcribeAudio } from './openai';
 import { FileProcessingError } from './errors';
 import { ERROR_MESSAGES } from './constants';
+import lamejs from 'lamejs';
 
 // Adjusted for Netlify's limits (4MB effective limit for binary data)
 const MAX_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
-const SUPPORTED_AUDIO_TYPES = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/flac'];
+const SUPPORTED_AUDIO_TYPES = ['audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/flac'];
 const MIN_CHUNK_DURATION = 3; // Minimum 3 seconds per chunk
 const OVERLAP_DURATION = 1; // 1 second overlap between chunks
 const SILENCE_THRESHOLD = -50; // dB threshold for silence detection
 const MIN_SILENCE_DURATION = 0.5; // Minimum silence duration in seconds
+const TARGET_SAMPLE_RATE = 16000; // 16kHz for optimal transcription
+const MP3_BITRATE = 64; // 64kbps for good quality while keeping size small
 
 // Helper function to format file size in MB
 function formatFileSize(bytes: number): string {
@@ -114,31 +117,30 @@ async function splitAudioIntoChunks(file: File): Promise<AudioChunk[]> {
     console.log(`Found ${silencePoints.length} potential split points`);
 
     // Calculate chunk parameters
-    const bytesPerSample = 4; // 32-bit float
-    const samplesPerChunk = Math.floor(MAX_CHUNK_SIZE / bytesPerSample);
-    const minChunkSamples = Math.max(
-      MIN_CHUNK_DURATION * audioBuffer.sampleRate,
-      samplesPerChunk / 2
-    );
-    const overlapSamples = OVERLAP_DURATION * audioBuffer.sampleRate;
+    const bytesPerSecond = MP3_BITRATE * 1024 / 8; // Convert bitrate to bytes/second
+    const maxChunkDuration = MAX_CHUNK_SIZE / bytesPerSecond;
     const chunks: AudioChunk[] = [];
     let chunkId = 0;
 
     // Split into chunks
     for (let offset = 0; offset < monoData.length;) {
       const remainingSamples = monoData.length - offset;
-      const targetChunkSize = Math.min(samplesPerChunk, remainingSamples);
+      const targetChunkSamples = Math.min(
+        Math.floor(maxChunkDuration * audioBuffer.sampleRate),
+        remainingSamples
+      );
       
       // Find best split point
       const splitPoint = findBestSplitPoint(
         silencePoints,
-        (offset + targetChunkSize) / audioBuffer.sampleRate,
+        (offset + targetChunkSamples) / audioBuffer.sampleRate,
         audioBuffer.sampleRate
       );
       
       // Ensure minimum chunk size
+      const minChunkSamples = MIN_CHUNK_DURATION * audioBuffer.sampleRate;
       const actualChunkSize = Math.max(
-        Math.min(splitPoint - offset + overlapSamples, remainingSamples),
+        Math.min(splitPoint - offset + (OVERLAP_DURATION * audioBuffer.sampleRate), remainingSamples),
         minChunkSamples
       );
       
@@ -165,7 +167,7 @@ async function splitAudioIntoChunks(file: File): Promise<AudioChunk[]> {
       chunks.push({
         id: chunkId++,
         data: chunkData,
-        sampleRate: 16000, // Use 16kHz for Whisper
+        sampleRate: TARGET_SAMPLE_RATE,
         duration: actualChunkSize / audioBuffer.sampleRate,
         startTime: offset / audioBuffer.sampleRate
       });
@@ -174,7 +176,7 @@ async function splitAudioIntoChunks(file: File): Promise<AudioChunk[]> {
         samples: actualChunkSize,
         duration: actualChunkSize / audioBuffer.sampleRate,
         startTime: offset / audioBuffer.sampleRate,
-        sizeBytes: actualChunkSize * bytesPerSample
+        estimatedSize: (actualChunkSize / audioBuffer.sampleRate) * bytesPerSecond
       });
 
       // Move to next chunk, accounting for overlap
@@ -197,52 +199,58 @@ async function splitAudioIntoChunks(file: File): Promise<AudioChunk[]> {
 }
 
 /**
- * Converts AudioChunk to WAV File
+ * Converts AudioChunk to MP3 File
  */
-async function chunkToWavFile(chunk: AudioChunk, originalFile: File): Promise<File> {
-  const offlineContext = new OfflineAudioContext(1, chunk.data.length, chunk.sampleRate);
-  
+async function chunkToMp3File(chunk: AudioChunk, originalFile: File): Promise<File> {
   try {
-    // Create buffer source
-    const source = offlineContext.createBufferSource();
-    const buffer = offlineContext.createBuffer(1, chunk.data.length, chunk.sampleRate);
-    buffer.copyToChannel(chunk.data, 0);
-    source.buffer = buffer;
+    // Convert Float32Array to Int16Array for MP3 encoding
+    const samples = new Int16Array(chunk.data.length);
+    for (let i = 0; i < chunk.data.length; i++) {
+      const sample = Math.max(-1, Math.min(1, chunk.data[i]));
+      samples[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+    }
 
-    // Add a gain node to normalize audio
-    const gainNode = offlineContext.createGain();
-    gainNode.gain.value = 0.9; // Slight reduction to prevent clipping
+    // Initialize MP3 encoder
+    const mp3encoder = new lamejs.Mp3Encoder(1, chunk.sampleRate, MP3_BITRATE);
+    const mp3Data: Int8Array[] = [];
 
-    // Connect nodes
-    source.connect(gainNode);
-    gainNode.connect(offlineContext.destination);
-    source.start();
+    // Encode in chunks of 1152 samples (required by MP3 format)
+    const sampleBlockSize = 1152;
+    for (let i = 0; i < samples.length; i += sampleBlockSize) {
+      const sampleChunk = samples.subarray(i, i + sampleBlockSize);
+      const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
+      if (mp3buf.length > 0) {
+        mp3Data.push(mp3buf);
+      }
+    }
 
-    // Render audio
-    console.log('🎵 Rendering audio chunk:', {
-      id: chunk.id,
-      samples: chunk.data.length,
-      duration: chunk.duration,
-      startTime: chunk.startTime
-    });
-    
-    const renderedBuffer = await offlineContext.startRendering();
+    // Get the last chunk of encoded data
+    const finalMp3buf = mp3encoder.flush();
+    if (finalMp3buf.length > 0) {
+      mp3Data.push(finalMp3buf);
+    }
 
-    // Convert to WAV format
-    const wavBlob = await audioBufferToWav(renderedBuffer);
-    
-    // Create file with proper naming
+    // Combine all chunks
+    const totalLength = mp3Data.reduce((acc, buf) => acc + buf.length, 0);
+    const combinedMp3Data = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const buf of mp3Data) {
+      combinedMp3Data.set(buf, offset);
+      offset += buf.length;
+    }
+
+    // Create MP3 file
     const fileName = originalFile.name.split('.').slice(0, -1).join('.');
     const file = new File(
-      [wavBlob],
-      `${fileName}_chunk${chunk.id}.wav`,
+      [combinedMp3Data],
+      `${fileName}_chunk${chunk.id}.mp3`,
       {
-        type: 'audio/wav',
+        type: 'audio/mp3',
         lastModified: Date.now()
       }
     );
 
-    console.log(`📝 Created WAV file for chunk ${chunk.id}:`, {
+    console.log(`📝 Created MP3 file for chunk ${chunk.id}:`, {
       name: file.name,
       size: formatFileSize(file.size),
       duration: chunk.duration
@@ -250,60 +258,8 @@ async function chunkToWavFile(chunk: AudioChunk, originalFile: File): Promise<Fi
 
     return file;
   } catch (error) {
-    console.error(`❌ Error creating WAV file for chunk ${chunk.id}:`, error);
+    console.error(`❌ Error creating MP3 file for chunk ${chunk.id}:`, error);
     throw error;
-  }
-}
-
-/**
- * Converts AudioBuffer to WAV format Blob
- */
-function audioBufferToWav(buffer: AudioBuffer): Promise<Blob> {
-  return new Promise((resolve) => {
-    const numberOfChannels = 1; // Force mono
-    const sampleRate = 16000; // Use 16kHz for Whisper
-    
-    // Calculate total samples
-    const length = buffer.length * numberOfChannels * 2; // 2 bytes per sample
-    const outputBuffer = new ArrayBuffer(44 + length);
-    const view = new DataView(outputBuffer);
-    
-    // Write WAV header
-    writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + length, true);
-    writeString(view, 8, 'WAVE');
-    writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM format
-    view.setUint16(22, numberOfChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * numberOfChannels * 2, true);
-    view.setUint16(32, numberOfChannels * 2, true);
-    view.setUint16(34, 16, true); // 16 bits per sample
-    
-    // Write data chunk
-    writeString(view, 36, 'data');
-    view.setUint32(40, length, true);
-    
-    // Write audio data
-    const channelData = buffer.getChannelData(0);
-    let offset = 44;
-    for (let i = 0; i < channelData.length; i++) {
-      const sample = Math.max(-1, Math.min(1, channelData[i]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-      offset += 2;
-    }
-    
-    resolve(new Blob([outputBuffer], { type: 'audio/wav' }));
-  });
-}
-
-/**
- * Helper to write strings to DataView
- */
-function writeString(view: DataView, offset: number, string: string): void {
-  for (let i = 0; i < string.length; i++) {
-    view.setUint8(offset + i, string.charCodeAt(i));
   }
 }
 
@@ -352,11 +308,11 @@ async function transcribeInChunks(chunks: AudioChunk[], originalFile: File): Pro
     try {
       console.log(`📝 Processing chunk ${chunk.id}/${chunks.length - 1}`);
       
-      // Convert chunk to WAV file
-      const wavFile = await chunkToWavFile(chunk, originalFile);
+      // Convert chunk to MP3 file
+      const mp3File = await chunkToMp3File(chunk, originalFile);
       
       // Transcribe chunk
-      let transcription = await transcribeAudio(wavFile);
+      let transcription = await transcribeAudio(mp3File);
       
       // Clean and validate transcription
       transcription = cleanTranscription(transcription);
@@ -447,7 +403,7 @@ export async function processFile(file: File): Promise<string> {
     // Convert video to audio if needed
     if (file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4')) {
       console.log('🎥 Converting video to audio...');
-      audioFile = await convertVideoToWav(file);
+      audioFile = await convertVideoToMp3(file);
     } else if (SUPPORTED_AUDIO_TYPES.includes(file.type) || file.name.toLowerCase().endsWith('.mp3')) {
       console.log(`🎵 Using audio file directly (${file.type})`);
       audioFile = file;

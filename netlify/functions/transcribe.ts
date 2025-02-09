@@ -173,7 +173,7 @@ const handler: Handler = async (event, context) => {
     // Create temporary file with unique name
     const timestamp = Date.now();
     const randomString = Math.random().toString(36).substring(7);
-    tmpFilePath = path.join(os.tmpdir(), `audio_${timestamp}_${randomString}.wav`);
+    tmpFilePath = path.join(os.tmpdir(), `audio_${timestamp}_${randomString}.mp3`);
     console.log('📝 Writing temporary file:', tmpFilePath);
     
     await fs.promises.writeFile(tmpFilePath, buffer);

@@ -14,9 +14,9 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
     });
 
     // Validate audio format
-    if (!audioFile.type.includes('audio/wav')) {
+    if (!audioFile.type.includes('audio/mp3') && !audioFile.type.includes('audio/mpeg')) {
       throw new TranscriptionError(
-        'Ungültiges Audioformat. Es wird WAV-Format erwartet.'
+        'Ungültiges Audioformat. Es wird MP3-Format erwartet.'
       );
     }
     

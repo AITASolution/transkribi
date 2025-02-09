@@ -1,7 +1,8 @@
 import { ERROR_MESSAGES } from './constants';
+import lamejs from 'lamejs';
 
-export async function convertVideoToWav(videoFile: File): Promise<File> {
-  console.log('🔄 Starting video to WAV conversion...');
+export async function convertVideoToMp3(videoFile: File): Promise<File> {
+  console.log('🔄 Starting video to MP3 conversion...');
   
   try {
     // Create audio context
@@ -13,33 +14,19 @@ export async function convertVideoToWav(videoFile: File): Promise<File> {
     // Decode audio data from video
     const audioBuffer = await audioContext.decodeAudioData(videoData);
     
-    // Create offline context for rendering
-    const offlineContext = new OfflineAudioContext(
-      audioBuffer.numberOfChannels,
-      audioBuffer.length,
-      audioBuffer.sampleRate
-    );
+    // Convert to mono and resample to 16kHz
+    const targetSampleRate = 16000;
+    const resampledBuffer = resampleAndConvertToMono(audioBuffer, targetSampleRate);
     
-    // Create buffer source
-    const source = offlineContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(offlineContext.destination);
+    // Convert to MP3
+    const mp3Data = convertToMp3(resampledBuffer, targetSampleRate);
     
-    console.log('🎵 Processing audio data...');
-    
-    // Start rendering
-    source.start(0);
-    const renderedBuffer = await offlineContext.startRendering();
-    
-    // Convert to WAV format
-    const wavData = audioBufferToWav(renderedBuffer);
-    
-    // Create WAV file
-    const wavBlob = new Blob([wavData], { type: 'audio/wav' });
-    const wavFile = new File([wavBlob], 'converted.wav', { type: 'audio/wav' });
+    // Create MP3 file
+    const mp3Blob = new Blob([mp3Data], { type: 'audio/mp3' });
+    const mp3File = new File([mp3Blob], 'converted.mp3', { type: 'audio/mp3' });
     
     console.log('✅ Conversion completed successfully');
-    return wavFile;
+    return mp3File;
     
   } catch (error) {
     console.error('❌ Conversion error:', error);
@@ -47,53 +34,68 @@ export async function convertVideoToWav(videoFile: File): Promise<File> {
   }
 }
 
-function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
-  const numOfChan = buffer.numberOfChannels;
-  const length = buffer.length * numOfChan * 2;
-  const buffer32 = new Float32Array(buffer.length * numOfChan);
-  const view = new DataView(new ArrayBuffer(44 + length));
-  const channels = [];
-  let pos = 0;
+function resampleAndConvertToMono(audioBuffer: AudioBuffer, targetSampleRate: number): Float32Array {
+  const numChannels = audioBuffer.numberOfChannels;
+  const originalLength = audioBuffer.length;
+  const originalSampleRate = audioBuffer.sampleRate;
+  const targetLength = Math.round(originalLength * targetSampleRate / originalSampleRate);
+  const resampledData = new Float32Array(targetLength);
 
-  // Extract channels
-  for (let i = 0; i < buffer.numberOfChannels; i++) {
-    channels.push(buffer.getChannelData(i));
+  // Mix down to mono and resample
+  for (let targetIndex = 0; targetIndex < targetLength; targetIndex++) {
+    const originalIndex = Math.floor(targetIndex * originalSampleRate / targetSampleRate);
+    let sum = 0;
+    
+    for (let channel = 0; channel < numChannels; channel++) {
+      const channelData = audioBuffer.getChannelData(channel);
+      sum += channelData[originalIndex];
+    }
+    
+    resampledData[targetIndex] = sum / numChannels;
   }
 
-  // Interleave channels
-  for (let i = 0; i < buffer.length; i++) {
-    for (let j = 0; j < numOfChan; j++) {
-      buffer32[pos] = channels[j][i];
-      pos++;
+  return resampledData;
+}
+
+function convertToMp3(audioData: Float32Array, sampleRate: number): Uint8Array {
+  // Configure MP3 encoder
+  const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, 128); // mono, 16kHz, 128kbps
+  const sampleBlockSize = 1152; // Must be multiple of 576 for MP3
+  const mp3Data: Int8Array[] = [];
+
+  // Convert Float32Array to Int16Array (required by the encoder)
+  const samples = new Int16Array(audioData.length);
+  for (let i = 0; i < audioData.length; i++) {
+    // Scale to 16-bit range and clip
+    const sample = Math.max(-1, Math.min(1, audioData[i]));
+    samples[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+  }
+
+  // Encode samples
+  for (let i = 0; i < samples.length; i += sampleBlockSize) {
+    const sampleChunk = samples.subarray(i, i + sampleBlockSize);
+    const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
+    if (mp3buf.length > 0) {
+      mp3Data.push(mp3buf);
     }
   }
 
-  // Write WAV header
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + length, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numOfChan, true);
-  view.setUint32(24, buffer.sampleRate, true);
-  view.setUint32(28, buffer.sampleRate * 2 * numOfChan, true);
-  view.setUint16(32, numOfChan * 2, true);
-  view.setUint16(34, 16, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, length, true);
-
-  // Write audio data
-  const volume = 1;
-  for (let i = 0; i < buffer32.length; i++) {
-    view.setInt16(44 + (i * 2), buffer32[i] * (0x7FFF * volume), true);
+  // Get the last chunk of encoded data
+  const finalMp3buf = mp3encoder.flush();
+  if (finalMp3buf.length > 0) {
+    mp3Data.push(finalMp3buf);
   }
 
-  return view.buffer;
-}
-
-function writeString(view: DataView, offset: number, string: string): void {
-  for (let i = 0; i < string.length; i++) {
-    view.setUint8(offset + i, string.charCodeAt(i));
+  // Calculate total length
+  const totalLength = mp3Data.reduce((acc, buf) => acc + buf.length, 0);
+  
+  // Combine all chunks into a single Uint8Array
+  const combinedMp3Data = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const buf of mp3Data) {
+    combinedMp3Data.set(buf, offset);
+    offset += buf.length;
   }
+
+  return combinedMp3Data;
 }
