@@ -29,15 +29,22 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
     let responseData;
     try {
       const responseText = await response.text();
+      console.log('Server response:', responseText); // Log raw response for debugging
+      
       try {
         responseData = JSON.parse(responseText);
       } catch (parseError) {
         console.error('Failed to parse response as JSON:', responseText);
-        throw new TranscriptionError('Ungültige Antwort vom Server');
+        throw new TranscriptionError(
+          `Ungültige Antwort vom Server: ${responseText.substring(0, 100)}...`
+        );
       }
     } catch (error) {
       console.error('Failed to read response:', error);
-      throw new TranscriptionError('Fehler beim Lesen der Server-Antwort');
+      const errorMessage = error instanceof Error ? error.message : 'Unbekannter Fehler';
+      throw new TranscriptionError(
+        `Fehler beim Lesen der Server-Antwort: ${errorMessage}`
+      );
     }
 
     if (!response.ok) {
@@ -47,23 +54,49 @@ export async function transcribeAudio(audioFile: File): Promise<string> {
         error: responseData
       });
 
-      // Handle specific error cases
+      // Handle specific error cases with more detailed messages
       switch (response.status) {
         case 413:
-          throw new TranscriptionError('Die Datei ist zu groß für die Verarbeitung');
+          throw new TranscriptionError(
+            'Die Datei ist zu groß für die Verarbeitung. Maximale Größe: 25MB'
+          );
         case 400:
           if (responseData.error === 'File too large') {
-            throw new TranscriptionError('Die Audiodatei überschreitet die maximale Größe');
+            throw new TranscriptionError(
+              'Die Audiodatei überschreitet die maximale Größe von 25MB'
+            );
           }
-          throw new TranscriptionError(responseData.details || 'Ungültige Anfrage');
+          if (responseData.code === 'invalid_request_error') {
+            throw new TranscriptionError(
+              'Das Audioformat wird nicht unterstützt oder die Datei ist beschädigt'
+            );
+          }
+          throw new TranscriptionError(
+            responseData.details || 'Ungültige Anfrage. Bitte überprüfen Sie das Audioformat.'
+          );
+        case 429:
+          throw new TranscriptionError(
+            'API-Limit erreicht. Bitte versuchen Sie es in einigen Minuten erneut.'
+          );
         case 500:
           if (responseData.error === 'OpenAI API Error') {
-            throw new TranscriptionError(`OpenAI API Fehler: ${responseData.details}`);
+            throw new TranscriptionError(
+              `OpenAI API Fehler: ${responseData.details}. Bitte versuchen Sie es erneut.`
+            );
           }
-          throw new TranscriptionError('Interner Serverfehler');
+          if (responseData.error === 'File Processing Error') {
+            throw new TranscriptionError(
+              'Fehler bei der Verarbeitung der Audiodatei. Bitte überprüfen Sie das Format.'
+            );
+          }
+          throw new TranscriptionError(
+            'Ein Serverfehler ist aufgetreten. Bitte versuchen Sie es später erneut.'
+          );
         default:
           throw new TranscriptionError(
-            responseData.details || responseData.error || ERROR_MESSAGES.TRANSCRIPTION
+            responseData.details ||
+            responseData.error ||
+            `Ein unerwarteter Fehler ist aufgetreten (Status: ${response.status})`
           );
       }
     }

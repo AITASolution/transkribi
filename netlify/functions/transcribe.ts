@@ -1,8 +1,10 @@
 import { Handler } from '@netlify/functions';
-import OpenAI from 'openai';
+import OpenAI, { APIError } from 'openai';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+
+type OpenAIError = APIError;
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB in bytes
 
@@ -155,25 +157,46 @@ const handler: Handler = async (event, context) => {
     console.log('📝 Writing temporary file:', tmpFilePath);
     await fs.promises.writeFile(tmpFilePath, buffer);
 
-    // Erstelle einen ReadStream aus der temporären Datei
-    const stream = fs.createReadStream(tmpFilePath);
-
     console.log('🎯 Starting transcription');
     let transcription;
     try {
-      transcription = await openai.audio.transcriptions.create({
-        file: stream,
-        model: 'whisper-1',
-        language: 'de',
-      });
-      console.log('✅ Transcription successful');
+      // Create a ReadStream and ensure it's properly closed after use
+      const stream = fs.createReadStream(tmpFilePath);
+      
+      try {
+        transcription = await openai.audio.transcriptions.create({
+          file: stream,
+          model: 'whisper-1',
+          language: 'de',
+        });
+        console.log('✅ Transcription successful');
+      } finally {
+        // Always close the stream
+        stream.destroy();
+      }
     } catch (error) {
       console.error('❌ OpenAI transcription error:', error);
+      
+      // Log detailed error information
+      if (error.response) {
+        console.error('OpenAI API response:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data
+        });
+      }
+      
       // Clean up the temporary file before throwing
       await fs.promises.unlink(tmpFilePath).catch(err => {
         console.error('Failed to delete temporary file:', err);
       });
-      throw error; // Will be caught by outer try-catch
+      
+      // Throw a more specific error
+      throw new Error(
+        error.response?.data?.error?.message ||
+        error.message ||
+        'Unknown transcription error'
+      );
     }
 
     // Clean up the temporary file
@@ -204,34 +227,70 @@ const handler: Handler = async (event, context) => {
       }
     }
     
-    // Behandlung von OpenAI API-Fehlern
-    if (error instanceof OpenAI.APIError) {
+    // Enhanced error handling
+    if (error instanceof APIError) {
       console.error('OpenAI API Error:', {
         status: error.status,
         message: error.message,
         code: error.code,
-        type: error.type
+        type: error.type,
+        details: error.error
       });
       
+      // Handle specific OpenAI error cases
+      let errorDetails = error.message;
+      let statusCode = error.status || 500;
+      
+      switch (error.code) {
+        case 'invalid_request_error':
+          statusCode = 400;
+          errorDetails = 'Invalid audio file format or corrupted file';
+          break;
+        case 'rate_limit_exceeded':
+          statusCode = 429;
+          errorDetails = 'API rate limit exceeded. Please try again later';
+          break;
+        case 'file_too_large':
+          statusCode = 413;
+          errorDetails = 'Audio file is too large for processing';
+          break;
+      }
+      
       return {
-        statusCode: error.status || 500,
+        statusCode,
         headers,
         body: JSON.stringify({
           error: 'OpenAI API Error',
-          details: error.message,
+          details: errorDetails,
           code: error.code,
           type: error.type
         })
       };
     }
     
-    // Behandlung anderer Fehler
+    // Handle file system errors
+    if (error.code && ['ENOENT', 'EACCES', 'EBADF'].includes(error.code)) {
+      console.error('File system error:', error);
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          error: 'File Processing Error',
+          details: 'Failed to process audio file',
+          code: error.code
+        })
+      };
+    }
+    
+    // Generic error handler
+    console.error('Unhandled error:', error);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ 
-        error: 'Transcription failed',
-        details: error instanceof Error ? error.message : 'Unknown error'
+      body: JSON.stringify({
+        error: 'Transcription Failed',
+        details: error instanceof Error ? error.message : 'Unknown server error',
+        id: context.awsRequestId // Include request ID for tracking
       })
     };
   }
