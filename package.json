@@ -21,7 +21,7 @@
     "fluent-ffmpeg": "^2.1.2",
     "formidable": "^3.5.2",
     "gsap": "^3.12.7",
-    "lamejs": "github:zhuker/lamejs",
+    "@breezystack/lamejs": "latest",
     "lucide-react": "^0.344.0",
     "openai": "^4.28.0",
     "react": "^18.3.1",

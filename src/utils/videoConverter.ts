@@ -1,5 +1,5 @@
 import { ERROR_MESSAGES } from './constants';
-import lamejs from 'lamejs';
+import * as lame from '@breezystack/lamejs';
 
 // MP3 encoding configuration
 const MP3_SAMPLE_RATE = 16000; // 16kHz for Whisper
@@ -64,7 +64,7 @@ function resampleAndConvertToMono(audioBuffer: AudioBuffer, targetSampleRate: nu
 
 function convertToMp3(audioData: Float32Array): Uint8Array {
   // Initialize MP3 encoder
-  const mp3encoder = new lamejs.Mp3Encoder(
+  const mp3encoder = new lame.Mp3Encoder(
     MP3_CHANNELS, // mono
     MP3_SAMPLE_RATE,
     MP3_BITRATE
