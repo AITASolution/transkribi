@@ -22,8 +22,14 @@
   included_files = ["node_modules/@ffmpeg-installer/ffmpeg/ffmpeg"]
 
 [functions.transcribe]
+  # Increase timeout for processing
   timeout = 30
+  # Increase memory allocation
   memory = 1024
+  # Configure proper headers
+  [functions.transcribe.environment]
+    CONTENT_TYPE = "application/json"
+    CACHE_CONTROL = "no-store, no-cache, must-revalidate, proxy-revalidate"
 
 [[headers]]
   for = "/assets/*"

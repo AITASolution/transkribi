@@ -3,7 +3,8 @@ import { transcribeAudio } from './openai';
 import { FileProcessingError } from './errors';
 import { ERROR_MESSAGES } from './constants';
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB in bytes
+// Adjusted for Netlify's limits (4MB effective limit for binary data)
+const MAX_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const SUPPORTED_AUDIO_TYPES = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/flac'];
 
 // Helper function to format file size in MB
@@ -11,11 +12,18 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+interface AudioChunk {
+  id: number;
+  data: Float32Array;
+  sampleRate: number;
+  duration: number;
+}
+
 /**
- * Splits audio at optimal points using Web Audio API
+ * Splits audio into smaller chunks that fit within Netlify's limits
  */
-async function splitAudioFile(file: File): Promise<[File, File]> {
-  console.log('🔄 Starting audio file split process');
+async function splitAudioIntoChunks(file: File): Promise<AudioChunk[]> {
+  console.log('🔄 Starting audio chunking process');
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
   try {
@@ -31,107 +39,85 @@ async function splitAudioFile(file: File): Promise<[File, File]> {
       channels: audioBuffer.numberOfChannels
     });
 
-    // Find a zero-crossing point near the middle for clean split
-    const channel = audioBuffer.getChannelData(0);
-    const mid = Math.floor(audioBuffer.length / 2);
-    let splitPoint = mid;
-    
-    // Look for a zero-crossing point within 1000 samples of the midpoint
-    const searchRange = 1000;
-    for (let i = 0; i < searchRange; i++) {
-      if (Math.abs(channel[mid + i]) < 0.001) {
-        splitPoint = mid + i;
-        break;
+    // Calculate samples per chunk (4MB limit)
+    const bytesPerSample = 4; // 32-bit float
+    const samplesPerChunk = Math.floor(MAX_CHUNK_SIZE / bytesPerSample);
+    const chunks: AudioChunk[] = [];
+
+    // Mix down to mono and split into chunks
+    const totalSamples = audioBuffer.length;
+    let chunkId = 0;
+
+    for (let offset = 0; offset < totalSamples; offset += samplesPerChunk) {
+      const chunkSize = Math.min(samplesPerChunk, totalSamples - offset);
+      const chunkData = new Float32Array(chunkSize);
+
+      // Mix down to mono
+      for (let i = 0; i < chunkSize; i++) {
+        let sum = 0;
+        for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+          sum += audioBuffer.getChannelData(channel)[offset + i];
+        }
+        chunkData[i] = sum / audioBuffer.numberOfChannels;
       }
-      if (Math.abs(channel[mid - i]) < 0.001) {
-        splitPoint = mid - i;
-        break;
+
+      // Add fade in/out at chunk boundaries
+      const fadeSamples = Math.min(100, chunkSize / 10);
+      if (offset > 0) {
+        // Fade in
+        for (let i = 0; i < fadeSamples; i++) {
+          const fadeIn = Math.sin((i / fadeSamples) * Math.PI / 2);
+          chunkData[i] *= fadeIn;
+        }
       }
+      if (offset + chunkSize < totalSamples) {
+        // Fade out
+        for (let i = 0; i < fadeSamples; i++) {
+          const fadeOut = Math.cos((i / fadeSamples) * Math.PI / 2);
+          chunkData[chunkSize - fadeSamples + i] *= fadeOut;
+        }
+      }
+
+      chunks.push({
+        id: chunkId++,
+        data: chunkData,
+        sampleRate: 16000, // Use 16kHz for Whisper
+        duration: chunkSize / audioBuffer.sampleRate
+      });
+
+      console.log(`📝 Created chunk ${chunkId}:`, {
+        samples: chunkSize,
+        duration: chunkSize / audioBuffer.sampleRate,
+        sizeBytes: chunkSize * bytesPerSample
+      });
     }
 
-    console.log('📝 Split point found:', {
-      originalMid: mid,
-      actualSplitPoint: splitPoint,
-      timeSplit: splitPoint / audioBuffer.sampleRate
+    console.log('✅ Audio chunking completed:', {
+      totalChunks: chunks.length,
+      averageChunkSize: formatFileSize(samplesPerChunk * bytesPerSample)
     });
 
-    // Create two new buffers for the halves
-    const firstHalf = audioContext.createBuffer(
-      1, // Force mono
-      splitPoint,
-      16000 // Use 16kHz for Whisper
-    );
-
-    const secondHalf = audioContext.createBuffer(
-      1, // Force mono
-      audioBuffer.length - splitPoint,
-      16000 // Use 16kHz for Whisper
-    );
-
-    // Mix down to mono and copy data
-    for (let i = 0; i < splitPoint; i++) {
-      let sum = 0;
-      for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
-        sum += audioBuffer.getChannelData(channel)[i];
-      }
-      firstHalf.getChannelData(0)[i] = sum / audioBuffer.numberOfChannels;
-    }
-
-    for (let i = 0; i < audioBuffer.length - splitPoint; i++) {
-      let sum = 0;
-      for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
-        sum += audioBuffer.getChannelData(channel)[i + splitPoint];
-      }
-      secondHalf.getChannelData(0)[i] = sum / audioBuffer.numberOfChannels;
-    }
-
-    // Add a small fade in/out at the split point to prevent clicks
-    const fadeSamples = 100;
-    for (let i = 0; i < fadeSamples; i++) {
-      const fadeOut = Math.cos((i / fadeSamples) * Math.PI / 2);
-      const fadeIn = Math.sin((i / fadeSamples) * Math.PI / 2);
-      
-      firstHalf.getChannelData(0)[splitPoint - fadeSamples + i] *= fadeOut;
-      secondHalf.getChannelData(0)[i] *= fadeIn;
-    }
-
-    // Convert buffers back to files
-    console.log('📝 Converting split buffers to files');
-    const [firstFile, secondFile] = await Promise.all([
-      audioBufferToFile(firstHalf, '1', file),
-      audioBufferToFile(secondHalf, '2', file)
-    ]);
-
-    console.log('✅ Audio file split completed successfully');
-    return [firstFile, secondFile];
+    return chunks;
   } catch (error) {
-    console.error('❌ Error splitting audio file:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-    throw new Error(`Failed to split audio file: ${errorMessage}`);
+    console.error('❌ Error splitting audio into chunks:', error);
+    throw new Error(`Failed to split audio: ${error instanceof Error ? error.message : 'Unknown error'}`);
   } finally {
     audioContext.close();
   }
 }
 
 /**
- * Converts AudioBuffer to File with proper format
+ * Converts AudioChunk to WAV File
  */
-async function audioBufferToFile(
-  audioBuffer: AudioBuffer,
-  suffix: string,
-  originalFile: File
-): Promise<File> {
+async function chunkToWavFile(chunk: AudioChunk, originalFile: File): Promise<File> {
+  const offlineContext = new OfflineAudioContext(1, chunk.data.length, chunk.sampleRate);
+  
   try {
-    // Create offline context for rendering with standard settings
-    const offlineContext = new OfflineAudioContext(
-      1, // Force mono channel for better compatibility
-      audioBuffer.length,
-      16000 // Use 16kHz sample rate for Whisper
-    );
-
     // Create buffer source
     const source = offlineContext.createBufferSource();
-    source.buffer = audioBuffer;
+    const buffer = offlineContext.createBuffer(1, chunk.data.length, chunk.sampleRate);
+    buffer.copyToChannel(chunk.data, 0);
+    source.buffer = buffer;
 
     // Add a gain node to normalize audio
     const gainNode = offlineContext.createGain();
@@ -143,41 +129,37 @@ async function audioBufferToFile(
     source.start();
 
     // Render audio
-    console.log('🎵 Rendering audio buffer with settings:', {
-      channels: 1,
-      sampleRate: 16000,
-      duration: audioBuffer.duration
+    console.log('🎵 Rendering audio chunk:', {
+      id: chunk.id,
+      samples: chunk.data.length,
+      duration: chunk.duration
     });
     
     const renderedBuffer = await offlineContext.startRendering();
 
-    // Convert to WAV format with proper headers
+    // Convert to WAV format
     const wavBlob = await audioBufferToWav(renderedBuffer);
-
-    // Create file with explicit MIME type and proper name
+    
+    // Create file with proper naming
     const fileName = originalFile.name.split('.').slice(0, -1).join('.');
     const file = new File(
       [wavBlob],
-      `${fileName}_part${suffix}.wav`,
+      `${fileName}_chunk${chunk.id}.wav`,
       {
         type: 'audio/wav',
         lastModified: Date.now()
       }
     );
 
-    // Verify file details
-    console.log(`📝 Created WAV file part${suffix}:`, {
+    console.log(`📝 Created WAV file for chunk ${chunk.id}:`, {
       name: file.name,
-      type: file.type,
-      size: file.size,
-      sampleRate: renderedBuffer.sampleRate,
-      duration: renderedBuffer.duration,
-      channels: renderedBuffer.numberOfChannels
+      size: formatFileSize(file.size),
+      duration: chunk.duration
     });
 
     return file;
   } catch (error) {
-    console.error(`❌ Error creating WAV file part${suffix}:`, error);
+    console.error(`❌ Error creating WAV file for chunk ${chunk.id}:`, error);
     throw error;
   }
 }
@@ -187,52 +169,18 @@ async function audioBufferToFile(
  */
 function audioBufferToWav(buffer: AudioBuffer): Promise<Blob> {
   return new Promise((resolve) => {
-    // Force mono channel and 16kHz sample rate for Whisper
-    const numberOfChannels = 1;
-    const sampleRate = 16000;
+    const numberOfChannels = 1; // Force mono
+    const sampleRate = 16000; // Use 16kHz for Whisper
     
-    // Calculate total samples after resampling if needed
-    const resampleRatio = sampleRate / buffer.sampleRate;
-    const newLength = Math.floor(buffer.length * resampleRatio);
-    const length = newLength * numberOfChannels * 2; // 2 bytes per sample
-    
+    // Calculate total samples
+    const length = buffer.length * numberOfChannels * 2; // 2 bytes per sample
     const outputBuffer = new ArrayBuffer(44 + length);
     const view = new DataView(outputBuffer);
-    
-    // Mix down to mono and resample if needed
-    const monoData = new Float32Array(newLength);
-    
-    // If original buffer has multiple channels, mix them down to mono
-    if (buffer.numberOfChannels > 1) {
-      const channels = [];
-      for (let i = 0; i < buffer.numberOfChannels; i++) {
-        channels.push(buffer.getChannelData(i));
-      }
-      
-      // Simple linear interpolation for resampling
-      for (let i = 0; i < newLength; i++) {
-        const originalIndex = Math.floor(i / resampleRatio);
-        let sum = 0;
-        for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
-          sum += channels[channel][originalIndex];
-        }
-        monoData[i] = sum / buffer.numberOfChannels;
-      }
-    } else {
-      // If already mono, just resample
-      const originalData = buffer.getChannelData(0);
-      for (let i = 0; i < newLength; i++) {
-        const originalIndex = Math.floor(i / resampleRatio);
-        monoData[i] = originalData[originalIndex];
-      }
-    }
     
     // Write WAV header
     writeString(view, 0, 'RIFF');
     view.setUint32(4, 36 + length, true);
     writeString(view, 8, 'WAVE');
-    
-    // fmt chunk
     writeString(view, 12, 'fmt ');
     view.setUint32(16, 16, true);
     view.setUint16(20, 1, true); // PCM format
@@ -242,29 +190,20 @@ function audioBufferToWav(buffer: AudioBuffer): Promise<Blob> {
     view.setUint16(32, numberOfChannels * 2, true);
     view.setUint16(34, 16, true); // 16 bits per sample
     
-    // data chunk
+    // Write data chunk
     writeString(view, 36, 'data');
     view.setUint32(40, length, true);
     
     // Write audio data
+    const channelData = buffer.getChannelData(0);
     let offset = 44;
-    for (let i = 0; i < monoData.length; i++) {
-      const sample = Math.max(-1, Math.min(1, monoData[i]));
+    for (let i = 0; i < channelData.length; i++) {
+      const sample = Math.max(-1, Math.min(1, channelData[i]));
       view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
       offset += 2;
     }
     
-    // Create blob with proper MIME type
-    const blob = new Blob([outputBuffer], { type: 'audio/wav' });
-    console.log('📝 WAV blob created:', {
-      size: blob.size,
-      type: blob.type,
-      sampleRate,
-      channels: numberOfChannels,
-      duration: newLength / sampleRate
-    });
-    
-    resolve(blob);
+    resolve(new Blob([outputBuffer], { type: 'audio/wav' }));
   });
 }
 
@@ -278,90 +217,54 @@ function writeString(view: DataView, offset: number, string: string): void {
 }
 
 /**
- * Handles transcription of audio files with automatic splitting if needed
+ * Processes a file chunk by chunk and combines transcriptions
  */
-async function transcribeWithSplitting(file: File): Promise<string> {
-  let parts: File[] = [file];
-  let transcriptions: string[] = [];
+async function transcribeInChunks(chunks: AudioChunk[], originalFile: File): Promise<string> {
+  const transcriptions: string[] = [];
   let retryCount = 0;
   const maxRetries = 3;
   const retryDelay = 2000; // 2 seconds
 
-  console.log('🎙️ Starting transcription process with splitting capability');
+  console.log('🎙️ Starting chunked transcription process');
 
-  while (parts.length > 0) {
-    const currentPart = parts.shift()!;
-    console.log('📝 Processing part:', {
-      name: currentPart.name,
-      type: currentPart.type,
-      size: formatFileSize(currentPart.size)
-    });
-
-    if (currentPart.size > MAX_FILE_SIZE) {
-      console.log(`⚠️ File size (${formatFileSize(currentPart.size)}) exceeds limit of ${formatFileSize(MAX_FILE_SIZE)}. Splitting file...`);
-      try {
-        const [firstHalf, secondHalf] = await splitAudioFile(currentPart);
-        console.log('📝 Split file into parts:', {
-          firstHalf: {
-            name: firstHalf.name,
-            size: formatFileSize(firstHalf.size),
-            type: firstHalf.type
-          },
-          secondHalf: {
-            name: secondHalf.name,
-            size: formatFileSize(secondHalf.size),
-            type: secondHalf.type
-          }
-        });
-        // Add parts in reverse order (smaller chunks first)
-        parts.unshift(secondHalf, firstHalf);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        console.error('❌ Error splitting audio:', error);
-        throw new FileProcessingError(
-          `Datei konnte nicht aufgeteilt werden. Die Datei ist ${formatFileSize(currentPart.size)} groß, maximal erlaubt sind ${formatFileSize(MAX_FILE_SIZE)} pro Teil. Fehler: ${errorMessage}`
-        );
+  for (const chunk of chunks) {
+    try {
+      console.log(`📝 Processing chunk ${chunk.id}/${chunks.length - 1}`);
+      
+      // Convert chunk to WAV file
+      const wavFile = await chunkToWavFile(chunk, originalFile);
+      
+      // Transcribe chunk
+      const transcription = await transcribeAudio(wavFile);
+      console.log(`✅ Chunk ${chunk.id} transcribed successfully:`, {
+        length: transcription.length,
+        wordCount: transcription.split(/\s+/).length
+      });
+      
+      transcriptions.push(transcription);
+      retryCount = 0; // Reset retry count on success
+      
+    } catch (error) {
+      console.error(`❌ Failed to process chunk ${chunk.id}:`, error);
+      
+      if (retryCount < maxRetries) {
+        console.log(`🔄 Retrying chunk ${chunk.id} (attempt ${retryCount + 1}/${maxRetries})...`);
+        retryCount++;
+        await new Promise(resolve => setTimeout(resolve, retryDelay * retryCount));
+        chunks.unshift(chunk); // Put the chunk back at the start
+        continue;
       }
-    } else {
-      console.log(`🎙️ Transcribing file (${formatFileSize(currentPart.size)})...`);
-      try {
-        const transcription = await transcribeAudio(currentPart);
-        console.log('✅ Transcription successful:', {
-          partName: currentPart.name,
-          transcriptionLength: transcription.length,
-          wordCount: transcription.split(/\s+/).length
-        });
-        transcriptions.push(transcription);
-        retryCount = 0; // Reset retry count on success
-      } catch (error) {
-        console.error(`❌ Failed to transcribe part: ${currentPart.name}`, error);
-        
-        // Check if error is retryable
-        const isRetryableError = error instanceof Error && (
-          error.message.includes('Internal Error') ||
-          error.message.includes('timeout') ||
-          error.message.includes('rate limit')
-        );
-        
-        if (retryCount < maxRetries && isRetryableError) {
-          console.log(`🔄 Retrying transcription (attempt ${retryCount + 1}/${maxRetries})...`);
-          parts.unshift(currentPart); // Put the part back at the start of the queue
-          retryCount++;
-          await new Promise(resolve => setTimeout(resolve, retryDelay * retryCount));
-          continue;
-        }
-        
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        throw new FileProcessingError(
-          `Transkription fehlgeschlagen für Teil: ${currentPart.name}. Fehler: ${errorMessage}`
-        );
-      }
+      
+      throw new FileProcessingError(
+        `Fehler bei der Verarbeitung von Teil ${chunk.id}. ${error instanceof Error ? error.message : 'Unbekannter Fehler'}`
+      );
     }
   }
 
+  // Combine transcriptions
   const combinedText = transcriptions.join(' ').trim();
-  console.log('✅ All parts transcribed successfully:', {
-    totalParts: transcriptions.length,
+  console.log('✅ All chunks transcribed successfully:', {
+    totalChunks: chunks.length,
     totalLength: combinedText.length,
     totalWords: combinedText.split(/\s+/).length
   });
@@ -370,14 +273,14 @@ async function transcribeWithSplitting(file: File): Promise<string> {
 }
 
 /**
- * Processes a File, converting videos to audio if necessary und startet den Transkriptionsprozess.
+ * Main file processing function
  */
 export async function processFile(file: File): Promise<string> {
   try {
     console.log('🔄 Processing file:', file.name, 'Type:', file.type);
     let audioFile: File;
 
-    // Falls der MIME-Type nicht eindeutig ist, prüfen wir zusätzlich den Dateinamen:
+    // Convert video to audio if needed
     if (file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4')) {
       console.log('🎥 Converting video to audio...');
       audioFile = await convertVideoToWav(file);
@@ -388,16 +291,17 @@ export async function processFile(file: File): Promise<string> {
       throw new FileProcessingError(`Unsupported file format: ${file.type}`);
     }
 
-    // Log file details before starting transcription
+    // Log file details before processing
     console.log('🎙️ Starting transcription process for:', {
       name: audioFile.name,
       type: audioFile.type,
       size: formatFileSize(audioFile.size)
     });
 
-    const transcription = await transcribeWithSplitting(audioFile);
+    // Split audio into chunks and process
+    const chunks = await splitAudioIntoChunks(audioFile);
+    const transcription = await transcribeInChunks(chunks, audioFile);
     
-    // Log success with transcription length
     console.log('✅ Transcription completed:', {
       length: transcription.length,
       wordCount: transcription.split(/\s+/).length
@@ -416,7 +320,6 @@ export async function processFile(file: File): Promise<string> {
       throw error;
     }
 
-    // Include file details in error message
     throw new FileProcessingError(
       `${ERROR_MESSAGES.FILE_PROCESSING} (${file.name}, ${formatFileSize(file.size)})`,
       error

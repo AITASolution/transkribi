@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB in bytes
+const MAX_FILE_SIZE = 6 * 1024 * 1024; // 6MB Netlify limit
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
@@ -12,6 +12,13 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 interface FileSystemError extends Error {
   code?: string;
+}
+
+interface RequestMetadata {
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  attempt?: number;
 }
 
 const handler: Handler = async (event, context) => {
@@ -52,6 +59,7 @@ const handler: Handler = async (event, context) => {
   }
 
   let tmpFilePath = '';
+  let requestMetadata: RequestMetadata = {};
 
   try {
     // Verify OpenAI API key
@@ -84,6 +92,8 @@ const handler: Handler = async (event, context) => {
     let requestData;
     try {
       requestData = JSON.parse(event.body);
+      requestMetadata = requestData.metadata || {};
+      console.log('📝 Request metadata:', requestMetadata);
     } catch (error) {
       console.error('❌ Failed to parse request body as JSON');
       return {
@@ -136,7 +146,9 @@ const handler: Handler = async (event, context) => {
           headers,
           body: JSON.stringify({
             error: 'File too large',
-            details: `File size exceeds maximum of ${MAX_FILE_SIZE} bytes`
+            details: `File size exceeds maximum of ${MAX_FILE_SIZE} bytes`,
+            size: buffer.length,
+            limit: MAX_FILE_SIZE
           })
         };
       }
@@ -181,7 +193,8 @@ const handler: Handler = async (event, context) => {
         console.log(`📡 Calling OpenAI API (attempt ${attempt}/${MAX_RETRIES})`, {
           model: 'whisper-1',
           language: 'de',
-          fileSize: fileStats.size
+          fileSize: fileStats.size,
+          metadata: requestMetadata
         });
 
         const transcription = await openai.audio.transcriptions.create({
@@ -205,7 +218,14 @@ const handler: Handler = async (event, context) => {
         return {
           statusCode: 200,
           headers,
-          body: JSON.stringify({ text: transcription.text })
+          body: JSON.stringify({
+            text: transcription.text,
+            metadata: {
+              ...requestMetadata,
+              processingTime: Date.now() - timestamp,
+              attempts: attempt
+            }
+          })
         };
       } catch (error) {
         lastError = error as Error;
@@ -280,7 +300,8 @@ const handler: Handler = async (event, context) => {
           error: 'OpenAI API Error',
           details: errorDetails,
           code: error.code,
-          type: error.type
+          type: error.type,
+          metadata: requestMetadata
         })
       };
     }
@@ -295,7 +316,8 @@ const handler: Handler = async (event, context) => {
         body: JSON.stringify({
           error: 'File Processing Error',
           details: 'Failed to process audio file',
-          code: fsError.code
+          code: fsError.code,
+          metadata: requestMetadata
         })
       };
     }
@@ -307,7 +329,8 @@ const handler: Handler = async (event, context) => {
       body: JSON.stringify({
         error: 'Transcription Failed',
         details: error instanceof Error ? error.message : 'Unknown server error',
-        id: context.awsRequestId
+        id: context.awsRequestId,
+        metadata: requestMetadata
       })
     };
   }
